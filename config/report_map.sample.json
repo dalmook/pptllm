@@ -1,0 +1,25 @@
+{
+  "report_name": "샘플 보고서",
+  "output_filename_prefix": "sample_report",
+  "db": {
+    "user": "USER",
+    "password": "PASSWORD",
+    "dsn": "HOST:1521/SERVICE"
+  },
+  "bindings": [
+    {
+      "shape_name": "txt_summary",
+      "bind_type": "text",
+      "enabled": true
+    },
+    {
+      "shape_name": "tbl_main",
+      "bind_type": "tbl",
+      "sql_key": "main_table",
+      "columns": ["COL_A", "COL_B"],
+      "header_row": 1,
+      "clear_existing": true,
+      "enabled": true
+    }
+  ]
+}
