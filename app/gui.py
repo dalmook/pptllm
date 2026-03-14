@@ -36,13 +36,13 @@ class ReportAutomationApp(tk.Tk):
         self.controller = controller
         self.logger = logger
 
-        self.title("PPT 보고서 자동화 도구 (MVP)")
-        self.geometry("860x620")
+        self.title("PPT 보고서 자동화 도구 (Engine v1)")
+        self.geometry("920x680")
 
         self.ppt_var = tk.StringVar()
-        self.config_var = tk.StringVar()
-        self.sql_dir_var = tk.StringVar()
-        self.output_dir_var = tk.StringVar()
+        self.config_var = tk.StringVar(value="config/report_map.json")
+        self.sql_dir_var = tk.StringVar(value="sql")
+        self.output_dir_var = tk.StringVar(value="output")
         self.status_var = tk.StringVar(value="대기 중")
 
         self._build_ui()
@@ -60,10 +60,9 @@ class ReportAutomationApp(tk.Tk):
         run_button = ttk.Button(frame, text="실행", command=self._on_run_clicked)
         run_button.grid(row=4, column=0, pady=(12, 8), sticky="w")
 
-        log_label = ttk.Label(frame, text="실행 로그")
-        log_label.grid(row=5, column=0, columnspan=3, sticky="w", pady=(8, 4))
+        ttk.Label(frame, text="실행 로그").grid(row=5, column=0, columnspan=3, sticky="w", pady=(8, 4))
 
-        self.log_text = tk.Text(frame, height=20, state="disabled")
+        self.log_text = tk.Text(frame, height=24, state="disabled")
         self.log_text.grid(row=6, column=0, columnspan=3, sticky="nsew")
 
         status_bar = ttk.Label(frame, textvariable=self.status_var, relief="sunken", anchor="w")
@@ -118,6 +117,7 @@ class ReportAutomationApp(tk.Tk):
     def _on_run_clicked(self) -> None:
         try:
             self.status_var.set("실행 중...")
+            self.logger.info("사용자 실행 요청 수신")
             paths = self.controller.normalize_paths(
                 self.ppt_var.get(),
                 self.config_var.get(),
@@ -128,7 +128,10 @@ class ReportAutomationApp(tk.Tk):
             self.status_var.set("완료")
             messagebox.showinfo(
                 "완료",
-                f"실행이 완료되었습니다.\nSQL 파일 수: {summary.sql_files_count}",
+                "실행이 완료되었습니다.\n"
+                f"리포트: {summary.report_name}\n"
+                f"실행 SQL 수: {summary.sql_count}\n"
+                f"결과 파일: {summary.output_file}",
             )
         except Exception as exc:  # pylint: disable=broad-except
             self.status_var.set("오류")

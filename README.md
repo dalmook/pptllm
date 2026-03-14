@@ -1,9 +1,20 @@
-# PPT 보고서 자동화 도구 (1단계 MVP)
+# PPT 보고서 자동화 도구 (2단계: 실행 엔진 v1)
 
-기존 PowerPoint VBA 자동화 개념(`text placeholder`, `tbl`, `tblr`, `tblx`)을 유지하면서,
-Python + Tkinter 기반 데스크톱 앱으로 점진 이관하기 위한 **실행 가능한 골격 프로젝트**입니다.
+기존 VBA 개념(placeholder / `tbl` / `tblr` / `tblx` / chart)을 Python 구조로 옮기는 프로젝트입니다.
+이번 단계에서는 **실제로 동작하는 엔진 v1**을 붙였고, 우선순위 기능인 **text + tbl 바인더**를 구현했습니다.
 
-> 이번 1단계는 실행 흐름/구조 중심이며, 실제 PPT 바인딩/Oracle 조회는 다음 단계에서 구현합니다.
+## 이번 단계 구현 범위
+
+- Tkinter GUI에서 경로 선택 및 실행
+- `config/report_map.json` 로드 및 검증
+- `sql/*.sql` 자동 스캔 (utf-8 우선, cp949 fallback)
+- Oracle DB 실제 조회 (`oracledb`)
+- PowerPoint COM 열기/바인딩/결과 SaveAs (`pywin32`)
+- 실제 구현
+  - `text` binder: `{{TODAY}}`, `{{SQLKEY__FIELD}}`, `{{SQLKEY__1__FIELD}}`
+  - `tbl` binder: columns/header_row/clear_existing 반영
+- 스켈레톤(부분 구현)
+  - `tblr`, `tblx`, `cht`
 
 ## 1) 개발 환경 준비 (Windows CMD)
 
@@ -17,99 +28,104 @@ python -m venv .venv
 .venv\Scripts\activate
 ```
 
-### requirements 설치
+### 패키지 설치
 ```cmd
 pip install -r requirements.txt
 ```
 
-## 2) 앱 실행 방법
-
-프로젝트 루트에서 아래 명령 실행:
+## 2) 실행 방법
 
 ```cmd
 python -m app.main
 ```
 
-실행 후 GUI에서 다음을 선택합니다.
-1. PowerPoint 템플릿 파일 (`.pptx`/`.pptm`)
-2. 설정 JSON 파일 (`config/report_map.sample.json` 참고)
-3. SQL 폴더
-4. Output 폴더
+GUI에서 아래를 선택한 뒤 `실행` 버튼을 누릅니다.
+1. PowerPoint 템플릿 (`.pptx`/`.pptm`)
+2. config 파일 (`config/report_map.json`)
+3. SQL 폴더 (`sql`)
+4. output 폴더 (`output`)
 
-그리고 `실행` 버튼을 누르면 다음 흐름이 로그창에 출력됩니다.
-- 설정 파일 확인/로드
-- SQL 폴더 스캔
-- PPT 파일 경로 확인
-- Output 경로 확인
-- PPT 바인딩 단계 목업 완료
+성공 시 output 폴더에 `output_filename_prefix_YYYYMMDD_HHMMSS.pptx` 형태로 저장됩니다.
 
-## 3) PyInstaller 빌드 예시
+## 3) report_map.json 구조
 
-아래는 단일 실행 파일(onefile) 빌드 예시입니다.
+`shape_name` 기준으로 바인딩 정보를 정의합니다.
+
+```json
+{
+  "report_name": "주간 실적 보고서",
+  "output_filename_prefix": "weekly_report",
+  "db": {
+    "user": "SCOTT",
+    "password": "TIGER",
+    "dsn": "127.0.0.1:1521/ORCLPDB1"
+  },
+  "bindings": [
+    {
+      "shape_name": "txt_title",
+      "bind_type": "text",
+      "enabled": true
+    },
+    {
+      "shape_name": "tbl_sales",
+      "bind_type": "tbl",
+      "sql_key": "sales_table",
+      "columns": ["DIVISION", "SALES", "GROWTH"],
+      "header_row": 1,
+      "clear_existing": true,
+      "enabled": true
+    }
+  ]
+}
+```
+
+주요 필드:
+- 공통: `shape_name`, `bind_type`, `sql_key`, `enabled`
+- tbl: `columns`, `header_row`, `clear_existing`
+- tblr: `template_row` (이번 단계 스켈레톤)
+- tblx: `key_fields` (이번 단계 스켈레톤)
+- cht: `category_field`, `series_fields` (이번 단계 스켈레톤)
+
+## 4) SQL 파일 규칙
+
+- 파일명(확장자 제외)이 `SQL_KEY`입니다.
+- 예: `sql/sales_table.sql` -> `sql_key = "sales_table"`
+- 인코딩은 utf-8 우선, 실패 시 cp949로 재시도
+- 빈 SQL 파일은 경고 로그 후 스킵
+
+## 5) PyInstaller 예시
 
 ```cmd
 pyinstaller --noconfirm --onefile --windowed --name PPTReportTool app\main.py
 ```
 
-개발 중 디버깅 로그가 필요하면 `--windowed`를 제거한 콘솔 모드도 권장합니다.
+## 6) 현재 제한 사항
 
-```cmd
-pyinstaller --noconfirm --onefile --name PPTReportTool app\main.py
-```
+- `tblr` / `tblx` / `cht`는 인터페이스와 흐름만 준비된 상태입니다.
+- Linux/macOS에서는 COM 자동화가 동작하지 않으므로 Windows에서 테스트해야 합니다.
+- LLM 기능은 아직 미구현(의도된 상태)입니다.
 
-## 4) 폴더 구조
+## 7) 폴더 구조
 
 ```text
 pptllm/
 ├─ app/
-│  ├─ main.py
-│  ├─ gui.py
-│  ├─ controller.py
-│  ├─ config_loader.py
-│  ├─ sql_loader.py
-│  ├─ db.py
-│  ├─ ppt_session.py
-│  ├─ models.py
-│  ├─ llm_helper.py
 │  ├─ binders/
-│  │  ├─ text_binder.py
-│  │  ├─ table_binder.py
-│  │  ├─ repeat_row_binder.py
-│  │  ├─ anchor_fill_binder.py
-│  │  └─ chart_binder.py
+│  ├─ config_loader.py
+│  ├─ controller.py
+│  ├─ db.py
+│  ├─ gui.py
+│  ├─ llm_helper.py
+│  ├─ main.py
+│  ├─ models.py
+│  ├─ ppt_session.py
+│  ├─ sql_loader.py
 │  └─ utils/
-│     ├─ logger.py
-│     ├─ formatters.py
-│     └─ file_helpers.py
 ├─ config/
+│  ├─ report_map.json
 │  └─ report_map.sample.json
 ├─ sql/
-│  └─ sample.sql
 ├─ output/
 ├─ requirements.txt
 └─ README.md
 ```
-
-## 5) 현재 구현 범위 (1단계)
-
-- Tkinter GUI 실행
-- 파일/폴더 선택 기능
-- 실행 버튼 -> Controller 호출
-- 로그창/상태바 표시
-- 사용자 친화적 한국어 오류 메시지
-- 장기 확장을 위한 모듈 분리 구조
-- LLM 연동용 인터페이스(`llm_helper.py`)만 사전 배치
-
-## 6) 향후 확장 계획
-
-1. **실제 Oracle 조회 구현** (`oracledb`)
-2. **PowerPoint COM 자동화 구현** (`pywin32`)
-3. 기존 VBA 개념을 그대로 매핑하는 Binder 구현
-   - `text_binder`: `{{TODAY}}`, `{{SQLKEY__FIELD}}`, `{{SQLKEY__1__FIELD}}`
-   - `table_binder`: `tbl`
-   - `repeat_row_binder`: `tblr`
-   - `anchor_fill_binder`: `tblx`
-   - `chart_binder`: 차트 반영
-4. 실행 이력/에러 리포트 고도화
-5. LLM 보조 기능(설정 추천/검증/요약) 단계적 도입
-

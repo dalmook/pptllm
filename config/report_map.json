@@ -1,0 +1,47 @@
+{
+  "report_name": "주간 실적 보고서",
+  "output_filename_prefix": "weekly_report",
+  "db": {
+    "user": "SCOTT",
+    "password": "TIGER",
+    "dsn": "127.0.0.1:1521/ORCLPDB1"
+  },
+  "bindings": [
+    {
+      "shape_name": "txt_title",
+      "bind_type": "text",
+      "enabled": true
+    },
+    {
+      "shape_name": "tbl_sales",
+      "bind_type": "tbl",
+      "sql_key": "sales_table",
+      "columns": ["DIVISION", "SALES", "GROWTH"],
+      "header_row": 1,
+      "clear_existing": true,
+      "enabled": true
+    },
+    {
+      "shape_name": "tbl_topn",
+      "bind_type": "tblr",
+      "sql_key": "topn_rows",
+      "template_row": 2,
+      "enabled": false
+    },
+    {
+      "shape_name": "tbl_anchor",
+      "bind_type": "tblx",
+      "sql_key": "anchor_metrics",
+      "key_fields": ["FAM1", "USERFAM1", "DR"],
+      "enabled": false
+    },
+    {
+      "shape_name": "cht_sales",
+      "bind_type": "cht",
+      "sql_key": "sales_chart",
+      "category_field": "MONTH",
+      "series_fields": ["ACTUAL", "TARGET"],
+      "enabled": false
+    }
+  ]
+}

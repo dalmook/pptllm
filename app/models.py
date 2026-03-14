@@ -1,15 +1,17 @@
-"""애플리케이션 전반에서 사용하는 데이터 모델 모음."""
+"""애플리케이션 데이터 모델 정의."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Literal
+
+BindType = Literal["text", "tbl", "tblr", "tblx", "cht"]
 
 
 @dataclass(slots=True)
 class AppPaths:
-    """사용자가 GUI에서 선택한 주요 경로."""
+    """GUI에서 전달받은 경로 집합."""
 
     ppt_template: Path
     config_file: Path
@@ -18,19 +20,38 @@ class AppPaths:
 
 
 @dataclass(slots=True)
-class AppConfig:
-    """JSON 설정 파일에서 로드된 최소 설정 모델."""
+class ShapeBindingConfig:
+    """shape 단위 바인딩 설정."""
+
+    shape_name: str
+    bind_type: BindType
+    sql_key: str | None = None
+    columns: list[str] = field(default_factory=list)
+    header_row: int = 1
+    template_row: int = 2
+    key_fields: list[str] = field(default_factory=list)
+    category_field: str | None = None
+    series_fields: list[str] = field(default_factory=list)
+    clear_existing: bool = True
+    enabled: bool = True
+
+
+@dataclass(slots=True)
+class ReportMap:
+    """report_map.json 전체 구조."""
 
     report_name: str
-    db: Dict[str, str] = field(default_factory=dict)
-    binders: Dict[str, List[str]] = field(default_factory=dict)
+    db: dict[str, str] = field(default_factory=dict)
+    output_filename_prefix: str = "report"
+    bindings: list[ShapeBindingConfig] = field(default_factory=list)
 
 
 @dataclass(slots=True)
 class ExecutionSummary:
-    """1단계 실행 결과를 간단히 요약하기 위한 모델."""
+    """실행 요약 결과."""
 
-    config_loaded: bool
-    sql_files_count: int
-    paths_verified: bool
-    message: str
+    report_name: str
+    output_file: Path
+    sql_count: int
+    binding_results: dict[str, str] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
