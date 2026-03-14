@@ -125,3 +125,34 @@ class PptStructureReport:
     output_dir: str
     total_shapes: int
     by_slide: dict[int, list[PptShapeAnalysis]] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class MapDraftBinding:
+    """LLM이 생성한 report_map 초안의 shape 항목."""
+
+    shape_name: str
+    slide_index: int
+    recommended_bind_type: str
+    sql_key_candidate: str | None = None
+    header_row: int | None = None
+    template_row: int | None = None
+    key_fields: list[str] = field(default_factory=list)
+    columns: list[str] = field(default_factory=list)
+    category_field: str | None = None
+    series_fields: list[str] = field(default_factory=list)
+    enabled: bool = True
+    confidence: float = 0.5
+    reason: str = ""
+    notes: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class ReportMapDraft:
+    """LLM 생성 report_map 초안."""
+
+    generated_at: str
+    source_ppt: str
+    llm_provider: str
+    llm_model: str
+    bindings: list[MapDraftBinding] = field(default_factory=list)

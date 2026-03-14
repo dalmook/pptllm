@@ -1,27 +1,44 @@
-# PPT 보고서 자동화 도구 (4단계: 디버그 리포트 + 구조 분석)
+# PPT 보고서 자동화 도구 (5단계: LLM map 초안 생성기)
 
-이번 단계는 **실행 실패 원인 추적**과 **PPT 구조 분석 자동화**에 초점을 둡니다.
-LLM은 아직 호출하지 않으며, 다음 단계에서 LLM을 쉽게 붙이기 위한 입력 데이터 구조를 준비했습니다.
+이번 단계에서는 LLM을 **실행 엔진이 아닌 설정 초안 생성기**로만 붙였습니다.
+LLM은 PPT 수정/DB 조회/최종 실행 결정을 하지 않고, `ppt_structure`를 기반으로 `report_map.generated` 초안을 생성합니다.
+
+> 생성 결과는 반드시 사람이 검토 후 반영해야 합니다.
 
 ## 핵심 기능
 
-- 실행 후 디버그 리포트 자동 생성
-  - `output/debug_report.json`
-  - `output/debug_report.md`
-- shape 단위 실행 결과 구조화 수집
-  - 상태(success/warning/failed/skipped), row_count, 소요 시간, 메타 정보
-- 전역 실행 결과 수집
-  - 템플릿/출력/config/sql 경로, SQL row_count, 전체 소요 시간, 예외 정보
-- PPT 구조 분석기 추가
-  - `output/ppt_structure.json`
-  - `output/ppt_structure.md`
-- 구조 분석 휴리스틱 기반 추천 bind type 생성
-  - `text / tbl / tblr / tblx / cht / none`
-- GUI에 `PPT 구조 분석` 버튼 추가
-- LLM 인터페이스 준비
-  - `build_shape_analysis_payload(...)`
-  - `build_map_generation_prompt(...)`
-  - `build_sql_generation_prompt(...)`
+- 기존 실행 엔진 유지
+  - 실행 결과: `output/debug_report.json`, `output/debug_report.md`
+- 기존 구조 분석 유지
+  - 구조 분석: `output/ppt_structure.json`, `output/ppt_structure.md`
+- 신규 LLM map 초안 생성
+  - `output/report_map.generated.json`
+  - `output/report_map.generated.md`
+- GUI에 `LLM으로 map 초안 생성` 버튼 추가
+- LLM provider 2종 지원
+  - `mock`
+  - `openai_compatible`
+
+## LLM provider 설정
+
+`.env` 또는 환경변수로 설정합니다.
+
+### 1) Mock provider (권장 기본값)
+```cmd
+set LLM_PROVIDER=mock
+```
+
+### 2) OpenAI-compatible provider
+```cmd
+set LLM_PROVIDER=openai_compatible
+set LLM_BASE_URL=https://api.openai.com/v1
+set LLM_MODEL=gpt-4o-mini
+set LLM_API_KEY=YOUR_API_KEY
+```
+
+> 키/URL/모델은 하드코딩하지 않습니다.
+
+`.env.example` 파일도 참고하세요.
 
 ## Windows CMD 실행
 
@@ -34,57 +51,66 @@ python -m app.main
 
 ## GUI 사용 흐름
 
-1. PowerPoint 템플릿 선택
-2. 설정 JSON 선택 (`config/report_map.json`)
+1. 템플릿 PPT 선택
+2. config 선택
 3. SQL 폴더 선택
-4. Output 폴더 선택
-5. `실행` 또는 `PPT 구조 분석` 클릭
+4. output 폴더 선택
+5. 버튼 실행
+   - `실행`
+   - `PPT 구조 분석`
+   - `LLM으로 map 초안 생성`
 
-## Output 생성 파일
+## 생성 파일
 
-- 실행 시
-  - 결과 PPT: `prefix_YYYYMMDD_HHMMSS.pptx`
-  - `debug_report.json`
-  - `debug_report.md`
-- 구조 분석 시
-  - `ppt_structure.json`
-  - `ppt_structure.md`
+- 실행
+  - `debug_report.json`, `debug_report.md`
+- 구조 분석
+  - `ppt_structure.json`, `ppt_structure.md`
+- LLM 초안 생성
+  - `report_map.generated.json`, `report_map.generated.md`
 
-## 디버그 리포트 포함 항목
+## generated JSON 구조
 
-- 실행 시각
-- 템플릿 파일 / output 파일 / config 파일 / sql 폴더
-- 전체 요약(성공/경고/실패/건너뜀)
-- shape별 결과 표
-- 실패 목록 / 경고 목록
-- SQL row_count 요약
-- 성능 요약(총 시간, shape별 시간)
-- 예외 발생 시 stack trace
+```json
+{
+  "generated_at": "2026-03-15T20:00:00",
+  "source_ppt": "C:\\reports\\template.pptx",
+  "llm_provider": "mock",
+  "llm_model": "mock-heuristic",
+  "bindings": [
+    {
+      "shape_name": "tbl_pmix_qtr",
+      "slide_index": 3,
+      "recommended_bind_type": "tblx",
+      "sql_key_candidate": "PMIX_QTR",
+      "header_row": 1,
+      "template_row": null,
+      "key_fields": ["FAM1", "USERFAM1", "DR"],
+      "columns": [],
+      "category_field": null,
+      "series_fields": [],
+      "enabled": true,
+      "confidence": 0.87,
+      "reason": "anchor token 패턴으로 tblx를 추천합니다.",
+      "notes": [
+        "사람 검토 필요",
+        "sql_key 후보는 shape 이름/SQL 파일명을 기준으로 추정"
+      ]
+    }
+  ]
+}
+```
 
-## PPT 구조 분석 리포트 포함 항목
+## 현재 한계/주의사항
 
-- 분석 시각
-- 템플릿 파일
-- 슬라이드별 shape 목록
-- shape 기본 정보 표
-- 표 preview(최대 3행 x 8열)
-- placeholder 후보
-- anchor token 후보
-- 추천 bind type
-- 추천 이유
+- LLM 결과는 초안이며 정확성 보장 불가
+- 자동으로 `report_map.json`을 덮어쓰지 않음
+- OpenAI-compatible 호출 실패 시 환경변수/네트워크/응답 JSON 확인 필요
+- COM 기반 실행/분석은 Windows + Office 환경에서 최종 검증 필요
 
-## 바인더 구현 상태
+## 다음 6단계 제안
 
-- `text`: 구현
-- `tbl`: 구현
-- `tblr`: 구현
-- `tblx`: 구현
-- `cht`: 구현
-
-## 다음 단계(5단계) 연결 포인트
-
-- LLM 기반 report_map 초안 생성기
-- shape 분석 결과 -> map JSON 자동 생성
+- generated map -> 실행용 report_map 변환/병합 도구
 - SQL 초안 생성기
-- 오류 원인 문장형 진단
+- LLM 기반 오류 원인 문장형 진단
 

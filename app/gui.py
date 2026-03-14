@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Callable
 
 from app.controller import AppController
@@ -37,8 +37,8 @@ class ReportAutomationApp(tk.Tk):
         self.controller = controller
         self.logger = logger
 
-        self.title("PPT 보고서 자동화 도구 (Engine v4)")
-        self.geometry("980x720")
+        self.title("PPT 보고서 자동화 도구 (Engine v5)")
+        self.geometry("1030x760")
 
         self.ppt_var = tk.StringVar()
         self.config_var = tk.StringVar(value="config/report_map.json")
@@ -62,16 +62,14 @@ class ReportAutomationApp(tk.Tk):
         btn_frame = ttk.Frame(frame)
         btn_frame.grid(row=4, column=0, columnspan=3, sticky="w", pady=(10, 8))
 
-        run_button = ttk.Button(btn_frame, text="실행", command=self._on_run_clicked)
-        run_button.pack(side="left", padx=(0, 8))
-
-        analyze_button = ttk.Button(btn_frame, text="PPT 구조 분석", command=self._on_analyze_clicked)
-        analyze_button.pack(side="left")
+        ttk.Button(btn_frame, text="실행", command=self._on_run_clicked).pack(side="left", padx=(0, 8))
+        ttk.Button(btn_frame, text="PPT 구조 분석", command=self._on_analyze_clicked).pack(side="left", padx=(0, 8))
+        ttk.Button(btn_frame, text="LLM으로 map 초안 생성", command=self._on_generate_map_clicked).pack(side="left")
 
         ttk.Label(frame, textvariable=self.last_files_var).grid(row=5, column=0, columnspan=3, sticky="w")
         ttk.Label(frame, text="실행 로그").grid(row=6, column=0, columnspan=3, sticky="w", pady=(8, 4))
 
-        self.log_text = tk.Text(frame, height=24, state="disabled")
+        self.log_text = tk.Text(frame, height=26, state="disabled")
         self.log_text.grid(row=7, column=0, columnspan=3, sticky="nsew")
 
         status_bar = ttk.Label(frame, textvariable=self.status_var, relief="sunken", anchor="w")
@@ -138,9 +136,7 @@ class ReportAutomationApp(tk.Tk):
 
             debug_json = Path(paths.output_dir) / "debug_report.json"
             debug_md = Path(paths.output_dir) / "debug_report.md"
-            self.last_files_var.set(
-                f"최근 생성 파일: {summary.output_file}, {debug_json}, {debug_md}"
-            )
+            self.last_files_var.set(f"최근 생성 파일: {summary.output_file}, {debug_json}, {debug_md}")
 
             messagebox.showinfo(
                 "완료",
@@ -165,11 +161,42 @@ class ReportAutomationApp(tk.Tk):
             self.last_files_var.set(f"최근 생성 파일: {json_path}, {md_path}")
             messagebox.showinfo(
                 "구조 분석 완료",
-                f"총 shape 수: {report.total_shapes}\n"
-                f"JSON: {json_path}\n"
-                f"MD: {md_path}",
+                f"총 shape 수: {report.total_shapes}\nJSON: {json_path}\nMD: {md_path}",
             )
         except Exception as exc:  # pylint: disable=broad-except
             self.status_var.set("오류")
             self.logger.exception("구조 분석 중 오류 발생")
             messagebox.showerror("오류", f"구조 분석에 실패했습니다.\n원인: {exc}")
+
+    def _on_generate_map_clicked(self) -> None:
+        try:
+            self.status_var.set("LLM 초안 생성 중...")
+            template = Path(self.ppt_var.get()).expanduser()
+            output_dir = Path(self.output_dir_var.get()).expanduser()
+            sql_dir = Path(self.sql_dir_var.get()).expanduser()
+
+            hints = simpledialog.askstring(
+                "선택 힌트",
+                "선택적으로 힌트를 입력하세요 (예: 특정 shape는 tblx로 우선 고려):",
+                parent=self,
+            )
+
+            draft, json_path, md_path = self.controller.generate_map_draft_with_llm(
+                template_path=template,
+                output_dir=output_dir,
+                sql_dir=sql_dir,
+                user_hints=hints,
+            )
+            self.status_var.set("LLM 초안 생성 완료")
+            self.last_files_var.set(f"최근 생성 파일: {json_path}, {md_path}")
+            messagebox.showinfo(
+                "LLM 초안 생성 완료",
+                f"Provider/Model: {draft.llm_provider}/{draft.llm_model}\n"
+                f"바인딩 초안 개수: {len(draft.bindings)}\n"
+                f"JSON: {json_path}\nMD: {md_path}\n\n"
+                "※ generated 파일은 초안입니다. 반드시 사람이 검토 후 반영하세요.",
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            self.status_var.set("오류")
+            self.logger.exception("LLM 초안 생성 중 오류 발생")
+            messagebox.showerror("오류", f"LLM 초안 생성에 실패했습니다.\n원인: {exc}")

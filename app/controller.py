@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import traceback
 from datetime import datetime
@@ -17,10 +18,14 @@ from app.binders.text_binder import TextBinder
 from app.config_loader import ConfigLoader
 from app.db import OracleExecutor
 from app.debug_reporter import DebugReporter
+from app.llm_helper import LLMHelper
+from app.map_generator import MapGenerator
 from app.models import (
     AppPaths,
+    PptShapeAnalysis,
     PptStructureReport,
     ReportMap,
+    ReportMapDraft,
     RunExecutionSummary,
     ShapeBindingConfig,
     ShapeExecutionResult,
@@ -33,7 +38,7 @@ from app.utils.formatters import format_korean_now
 
 
 class AppController:
-    """실행 엔진 v4 컨트롤러."""
+    """실행 엔진 v5 컨트롤러."""
 
     def __init__(self, logger: logging.Logger) -> None:
         self.logger = logger
@@ -46,13 +51,14 @@ class AppController:
         self.chart_binder = ChartBinder(logger=logger)
         self.debug_reporter = DebugReporter()
         self.ppt_analyzer = PptAnalyzer(logger=logger)
+        self.map_generator = MapGenerator()
 
     def run(self, paths: AppPaths) -> RunExecutionSummary:
         """실행 엔진 전체 흐름을 수행하고 디버그 리포트를 생성한다."""
 
         started = perf_counter()
         executed_at = format_korean_now()
-        self.logger.info("실행 엔진 v4 시작")
+        self.logger.info("실행 엔진 v5 시작")
 
         summary = RunExecutionSummary(
             executed_at=executed_at,
@@ -82,9 +88,7 @@ class AppController:
             output_file = paths.output_dir / self._build_output_name(report_map.output_filename_prefix)
             summary.output_file = str(output_file)
 
-            shape_results = self._run_binders(report_map.bindings, paths.ppt_template, output_file, query_results)
-            summary.shape_results = shape_results
-
+            summary.shape_results = self._run_binders(report_map.bindings, paths.ppt_template, output_file, query_results)
             self._finalize_counts(summary)
         except Exception as exc:  # pylint: disable=broad-except
             summary.exception_message = str(exc)
@@ -95,7 +99,7 @@ class AppController:
             summary.total_elapsed_ms = int((perf_counter() - started) * 1000)
             self.debug_reporter.write(paths.output_dir, summary)
             self.logger.info(
-                "실행 엔진 v4 종료 - 성공:%d 경고:%d 실패:%d 건너뜀:%d",
+                "실행 엔진 v5 종료 - 성공:%d 경고:%d 실패:%d 건너뜀:%d",
                 summary.success_count,
                 summary.warning_count,
                 summary.failure_count,
@@ -105,14 +109,44 @@ class AppController:
         return summary
 
     def analyze_ppt_structure(self, template_path: Path, output_dir: Path) -> tuple[PptStructureReport, Path, Path]:
-        """PPT 구조 분석을 수행하고 구조 리포트를 저장한다."""
-
         ensure_file(template_path, "PowerPoint 템플릿")
         ensure_dir(output_dir, "출력")
         self.logger.info("PPT 구조 분석 시작: %s", template_path)
         report, json_path, md_path = self.ppt_analyzer.analyze(template_path, output_dir)
         self.logger.info("PPT 구조 분석 완료: json=%s md=%s", json_path, md_path)
         return report, json_path, md_path
+
+    def generate_map_draft_with_llm(
+        self,
+        template_path: Path,
+        output_dir: Path,
+        sql_dir: Path,
+        user_hints: str | None = None,
+    ) -> tuple[ReportMapDraft, Path, Path]:
+        """PPT 구조 분석 결과를 기반으로 report_map.generated 초안을 만든다."""
+
+        ensure_file(template_path, "PowerPoint 템플릿")
+        ensure_dir(output_dir, "출력")
+        ensure_dir(sql_dir, "SQL")
+
+        structure_json = output_dir / "ppt_structure.json"
+        if structure_json.exists():
+            self.logger.info("기존 구조 분석 결과를 사용합니다: %s", structure_json)
+            structure = self._load_structure_report(structure_json)
+        else:
+            self.logger.info("구조 분석 결과가 없어 먼저 분석을 실행합니다.")
+            structure, _, _ = self.analyze_ppt_structure(template_path, output_dir)
+
+        sql_map = self.sql_loader.scan(sql_dir)
+        sql_keys = sorted(sql_map.keys())
+
+        helper = LLMHelper.from_env()
+        self.logger.info("LLM map 초안 생성 시작: provider=%s model=%s", helper.provider.name, helper.provider.model)
+        draft = helper.generate_report_map_draft(structure=structure, sql_keys=sql_keys, user_hints=user_hints)
+
+        json_path, md_path = self.map_generator.write(output_dir, draft)
+        self.logger.info("LLM map 초안 생성 완료: json=%s md=%s", json_path, md_path)
+        return draft, json_path, md_path
 
     def _validate_input_paths(self, paths: AppPaths) -> None:
         ensure_file(paths.ppt_template, "PowerPoint 템플릿")
@@ -214,7 +248,6 @@ class AppController:
                     )
                 except Exception as exc:  # pylint: disable=broad-except
                     elapsed_ms = int((perf_counter() - started) * 1000)
-                    meta = self._apply_message_meta(meta, binding.bind_type, message, row_count)
                     result = ShapeExecutionResult(
                         shape_name=binding.shape_name,
                         shape_type="unknown",
@@ -266,31 +299,29 @@ class AppController:
 
     @staticmethod
     def _build_meta(binding: ShapeBindingConfig) -> dict[str, Any]:
-        meta: dict[str, Any] = {}
         if binding.bind_type == "tbl":
-            meta = {"columns": binding.columns, "header_row": binding.header_row}
-        elif binding.bind_type == "tblr":
-            meta = {
+            return {"columns": binding.columns, "header_row": binding.header_row}
+        if binding.bind_type == "tblr":
+            return {
                 "template_row": binding.template_row,
                 "generated_rows": 0,
                 "keep_template_row_if_empty": binding.keep_template_row_if_empty,
                 "clear_placeholders_if_empty": binding.clear_placeholders_if_empty,
             }
-        elif binding.bind_type == "tblx":
-            meta = {
+        if binding.bind_type == "tblx":
+            return {
                 "header_row": binding.header_row,
                 "key_fields": binding.key_fields,
                 "anchor_count": 0,
                 "matched_count": 0,
                 "unmatched_count": 0,
             }
-        elif binding.bind_type == "cht":
-            meta = {
+        if binding.bind_type == "cht":
+            return {
                 "category_field": binding.category_field,
                 "series_fields": binding.series_fields,
             }
-        return meta
-
+        return {}
 
     @staticmethod
     def _apply_message_meta(meta: dict[str, Any], bind_type: str, message: str, row_count: int) -> dict[str, Any]:
@@ -298,12 +329,11 @@ class AppController:
         if bind_type == "tblr":
             updated["generated_rows"] = row_count
         if bind_type == "tblx":
-            # 예: "OK: tblx 채움 완료(shape) anchor=2 match=1 empty=1"
             for token, key in (("anchor=", "anchor_count"), ("match=", "matched_count"), ("empty=", "unmatched_count")):
                 if token in message:
                     try:
                         updated[key] = int(message.split(token, 1)[1].split()[0])
-                    except Exception:
+                    except Exception:  # pylint: disable=broad-except
                         pass
         return updated
 
@@ -318,6 +348,21 @@ class AppController:
         summary.warning_count = sum(1 for r in summary.shape_results if r.status == "warning")
         summary.failure_count = sum(1 for r in summary.shape_results if r.status == "failed")
         summary.skipped_count = sum(1 for r in summary.shape_results if r.status == "skipped")
+
+    @staticmethod
+    def _load_structure_report(path: Path) -> PptStructureReport:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        by_slide: dict[int, list[PptShapeAnalysis]] = {}
+        for slide_key, items in payload.get("by_slide", {}).items():
+            slide_index = int(slide_key)
+            by_slide[slide_index] = [PptShapeAnalysis(**item) for item in items]
+        return PptStructureReport(
+            analyzed_at=payload.get("analyzed_at", ""),
+            template_file=payload.get("template_file", ""),
+            output_dir=payload.get("output_dir", ""),
+            total_shapes=int(payload.get("total_shapes", 0)),
+            by_slide=by_slide,
+        )
 
     @staticmethod
     def normalize_paths(ppt_path: str, config_path: str, sql_dir: str, output_dir: str) -> AppPaths:
