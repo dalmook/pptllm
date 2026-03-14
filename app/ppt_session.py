@@ -97,6 +97,17 @@ class PowerPointSession:
             raise ValueError("텍스트 프레임이 없는 shape에는 텍스트를 쓸 수 없습니다.")
         shape.TextFrame.TextRange.Text = text
 
+
+    @staticmethod
+    def detect_shape_type(shape: Any) -> str:
+        if bool(getattr(shape, "HasChart", False)):
+            return "chart"
+        if bool(getattr(shape, "HasTable", False)):
+            return "table"
+        if bool(getattr(shape, "HasTextFrame", False)) and bool(getattr(shape.TextFrame, "HasText", False)):
+            return "text"
+        return "unknown"
+
     @staticmethod
     def is_table_shape(shape: Any) -> bool:
         return bool(getattr(shape, "HasTable", False))

@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any, Literal
 
 BindType = Literal["text", "tbl", "tblr", "tblx", "cht"]
+ShapeType = Literal["text", "table", "chart", "unknown"]
+RunStatus = Literal["success", "warning", "failed", "skipped"]
 
 
 @dataclass(slots=True)
@@ -50,14 +52,76 @@ class ReportMap:
 
 
 @dataclass(slots=True)
-class ExecutionSummary:
-    """실행 요약 결과."""
+class ShapeExecutionResult:
+    """shape 단위 실행 결과."""
 
-    report_name: str
-    output_file: Path
-    sql_count: int
-    binding_results: dict[str, str] = field(default_factory=dict)
+    shape_name: str
+    shape_type: ShapeType
+    bind_type: str
+    sql_key: str | None
+    enabled: bool
+    status: RunStatus
+    message: str
+    row_count: int
+    started_at: str
+    ended_at: str
+    elapsed_ms: int
+    meta: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class RunExecutionSummary:
+    """전체 실행 결과 요약."""
+
+    executed_at: str
+    template_file: str
+    output_file: str
+    config_file: str
+    sql_dir: str
+    loaded_sql_keys: list[str]
+    sql_row_counts: dict[str, int]
+    total_elapsed_ms: int
+    shape_results: list[ShapeExecutionResult] = field(default_factory=list)
     success_count: int = 0
     warning_count: int = 0
     failure_count: int = 0
-    extra: dict[str, Any] = field(default_factory=dict)
+    skipped_count: int = 0
+    exception_message: str | None = None
+    stack_trace: str | None = None
+
+
+@dataclass(slots=True)
+class PptShapeAnalysis:
+    """PPT shape 구조 분석 결과."""
+
+    shape_name: str
+    slide_index: int
+    shape_type: ShapeType
+    has_text: bool
+    text_preview: str
+    has_table: bool
+    table_rows: int
+    table_cols: int
+    header_row_candidates: list[int] = field(default_factory=list)
+    table_preview: list[list[str]] = field(default_factory=list)
+    has_chart: bool = False
+    chart_series_names: list[str] = field(default_factory=list)
+    placeholder_candidates: list[str] = field(default_factory=list)
+    anchor_token_candidates: list[str] = field(default_factory=list)
+    recommended_bind_type: str = "none"
+    recommendation_reason: str = ""
+    recommended_header_row: int | None = None
+    recommended_template_row: int | None = None
+    recommended_key_fields_hints: list[str] = field(default_factory=list)
+    anchor_cell_candidates: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class PptStructureReport:
+    """PPT 구조 분석 리포트."""
+
+    analyzed_at: str
+    template_file: str
+    output_dir: str
+    total_shapes: int
+    by_slide: dict[int, list[PptShapeAnalysis]] = field(default_factory=dict)

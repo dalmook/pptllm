@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import tkinter as tk
+from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Callable
 
@@ -36,14 +37,15 @@ class ReportAutomationApp(tk.Tk):
         self.controller = controller
         self.logger = logger
 
-        self.title("PPT 보고서 자동화 도구 (Engine v3)")
-        self.geometry("920x680")
+        self.title("PPT 보고서 자동화 도구 (Engine v4)")
+        self.geometry("980x720")
 
         self.ppt_var = tk.StringVar()
         self.config_var = tk.StringVar(value="config/report_map.json")
         self.sql_dir_var = tk.StringVar(value="sql")
         self.output_dir_var = tk.StringVar(value="output")
         self.status_var = tk.StringVar(value="대기 중")
+        self.last_files_var = tk.StringVar(value="최근 생성 파일: 없음")
 
         self._build_ui()
         self._connect_logging()
@@ -57,19 +59,26 @@ class ReportAutomationApp(tk.Tk):
         self._make_path_row(frame, 2, "SQL 폴더", self.sql_dir_var, self._select_sql_dir)
         self._make_path_row(frame, 3, "Output 폴더", self.output_dir_var, self._select_output_dir)
 
-        run_button = ttk.Button(frame, text="실행", command=self._on_run_clicked)
-        run_button.grid(row=4, column=0, pady=(12, 8), sticky="w")
+        btn_frame = ttk.Frame(frame)
+        btn_frame.grid(row=4, column=0, columnspan=3, sticky="w", pady=(10, 8))
 
-        ttk.Label(frame, text="실행 로그").grid(row=5, column=0, columnspan=3, sticky="w", pady=(8, 4))
+        run_button = ttk.Button(btn_frame, text="실행", command=self._on_run_clicked)
+        run_button.pack(side="left", padx=(0, 8))
+
+        analyze_button = ttk.Button(btn_frame, text="PPT 구조 분석", command=self._on_analyze_clicked)
+        analyze_button.pack(side="left")
+
+        ttk.Label(frame, textvariable=self.last_files_var).grid(row=5, column=0, columnspan=3, sticky="w")
+        ttk.Label(frame, text="실행 로그").grid(row=6, column=0, columnspan=3, sticky="w", pady=(8, 4))
 
         self.log_text = tk.Text(frame, height=24, state="disabled")
-        self.log_text.grid(row=6, column=0, columnspan=3, sticky="nsew")
+        self.log_text.grid(row=7, column=0, columnspan=3, sticky="nsew")
 
         status_bar = ttk.Label(frame, textvariable=self.status_var, relief="sunken", anchor="w")
-        status_bar.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(8, 0))
+        status_bar.grid(row=8, column=0, columnspan=3, sticky="ew", pady=(8, 0))
 
         frame.grid_columnconfigure(1, weight=1)
-        frame.grid_rowconfigure(6, weight=1)
+        frame.grid_rowconfigure(7, weight=1)
 
     def _connect_logging(self) -> None:
         handler = TkTextHandler(self.log_text)
@@ -126,15 +135,41 @@ class ReportAutomationApp(tk.Tk):
             )
             summary = self.controller.run(paths)
             self.status_var.set("완료")
+
+            debug_json = Path(paths.output_dir) / "debug_report.json"
+            debug_md = Path(paths.output_dir) / "debug_report.md"
+            self.last_files_var.set(
+                f"최근 생성 파일: {summary.output_file}, {debug_json}, {debug_md}"
+            )
+
             messagebox.showinfo(
                 "완료",
                 "실행이 완료되었습니다.\n"
-                f"리포트: {summary.report_name}\n"
-                f"실행 SQL 수: {summary.sql_count}\n"
-                f"성공/경고/실패: {summary.success_count}/{summary.warning_count}/{summary.failure_count}\n"
-                f"결과 파일: {summary.output_file}",
+                f"성공/경고/실패/건너뜀: {summary.success_count}/{summary.warning_count}/"
+                f"{summary.failure_count}/{summary.skipped_count}\n"
+                f"결과 파일: {summary.output_file}\n"
+                f"디버그 리포트: {debug_json}\n{debug_md}",
             )
         except Exception as exc:  # pylint: disable=broad-except
             self.status_var.set("오류")
             self.logger.exception("실행 중 오류 발생")
             messagebox.showerror("오류", f"실행에 실패했습니다.\n원인: {exc}")
+
+    def _on_analyze_clicked(self) -> None:
+        try:
+            self.status_var.set("구조 분석 중...")
+            template = Path(self.ppt_var.get()).expanduser()
+            output_dir = Path(self.output_dir_var.get()).expanduser()
+            report, json_path, md_path = self.controller.analyze_ppt_structure(template, output_dir)
+            self.status_var.set("구조 분석 완료")
+            self.last_files_var.set(f"최근 생성 파일: {json_path}, {md_path}")
+            messagebox.showinfo(
+                "구조 분석 완료",
+                f"총 shape 수: {report.total_shapes}\n"
+                f"JSON: {json_path}\n"
+                f"MD: {md_path}",
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            self.status_var.set("오류")
+            self.logger.exception("구조 분석 중 오류 발생")
+            messagebox.showerror("오류", f"구조 분석에 실패했습니다.\n원인: {exc}")

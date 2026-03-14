@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import traceback
 from datetime import datetime
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 from app.binders.anchor_fill_binder import AnchorFillBinder
@@ -14,14 +16,24 @@ from app.binders.table_binder import TableBinder
 from app.binders.text_binder import TextBinder
 from app.config_loader import ConfigLoader
 from app.db import OracleExecutor
-from app.models import AppPaths, ExecutionSummary, ReportMap, ShapeBindingConfig
+from app.debug_reporter import DebugReporter
+from app.models import (
+    AppPaths,
+    PptStructureReport,
+    ReportMap,
+    RunExecutionSummary,
+    ShapeBindingConfig,
+    ShapeExecutionResult,
+)
+from app.ppt_analyzer import PptAnalyzer
 from app.ppt_session import PowerPointSession
 from app.sql_loader import SqlLoader
 from app.utils.file_helpers import ensure_dir, ensure_file
+from app.utils.formatters import format_korean_now
 
 
 class AppController:
-    """실행 엔진 v3 컨트롤러."""
+    """실행 엔진 v4 컨트롤러."""
 
     def __init__(self, logger: logging.Logger) -> None:
         self.logger = logger
@@ -32,43 +44,75 @@ class AppController:
         self.repeat_row_binder = RepeatRowBinder(logger=logger)
         self.anchor_fill_binder = AnchorFillBinder(logger=logger)
         self.chart_binder = ChartBinder(logger=logger)
+        self.debug_reporter = DebugReporter()
+        self.ppt_analyzer = PptAnalyzer(logger=logger)
 
-    def run(self, paths: AppPaths) -> ExecutionSummary:
-        """실행 엔진 전체 흐름을 수행한다."""
+    def run(self, paths: AppPaths) -> RunExecutionSummary:
+        """실행 엔진 전체 흐름을 수행하고 디버그 리포트를 생성한다."""
 
-        self.logger.info("실행 엔진 v3 시작")
-        self._validate_input_paths(paths)
+        started = perf_counter()
+        executed_at = format_korean_now()
+        self.logger.info("실행 엔진 v4 시작")
 
-        report_map = self.config_loader.load(paths.config_file)
-        self.logger.info("리포트 설정 로드 완료: %s", report_map.report_name)
-
-        sql_map = self.sql_loader.scan(paths.sql_dir)
-
-        sql_keys = self._collect_sql_keys(report_map.bindings)
-        self._validate_sql_keys(sql_keys, sql_map)
-
-        query_results = self._execute_queries(report_map.bindings, sql_map, report_map)
-
-        output_file = paths.output_dir / self._build_output_name(report_map.output_filename_prefix)
-        binding_results = self._run_binders(report_map.bindings, paths.ppt_template, output_file, query_results)
-
-        success_count, warning_count, failure_count = self._summarize_binding_status(binding_results)
-
-        self.logger.info(
-            "실행 엔진 v3 완료 - 성공:%d 경고:%d 실패:%d",
-            success_count,
-            warning_count,
-            failure_count,
+        summary = RunExecutionSummary(
+            executed_at=executed_at,
+            template_file=str(paths.ppt_template),
+            output_file="",
+            config_file=str(paths.config_file),
+            sql_dir=str(paths.sql_dir),
+            loaded_sql_keys=[],
+            sql_row_counts={},
+            total_elapsed_ms=0,
         )
-        return ExecutionSummary(
-            report_name=report_map.report_name,
-            output_file=output_file,
-            sql_count=len(query_results),
-            binding_results=binding_results,
-            success_count=success_count,
-            warning_count=warning_count,
-            failure_count=failure_count,
-        )
+
+        try:
+            self._validate_input_paths(paths)
+            report_map = self.config_loader.load(paths.config_file)
+            self.logger.info("리포트 설정 로드 완료: %s", report_map.report_name)
+
+            sql_map = self.sql_loader.scan(paths.sql_dir)
+            summary.loaded_sql_keys = sorted(sql_map.keys())
+
+            sql_keys = self._collect_sql_keys(report_map.bindings)
+            self._validate_sql_keys(sql_keys, sql_map)
+
+            query_results = self._execute_queries(report_map.bindings, sql_map, report_map)
+            summary.sql_row_counts = {k: len(v) for k, v in query_results.items()}
+
+            output_file = paths.output_dir / self._build_output_name(report_map.output_filename_prefix)
+            summary.output_file = str(output_file)
+
+            shape_results = self._run_binders(report_map.bindings, paths.ppt_template, output_file, query_results)
+            summary.shape_results = shape_results
+
+            self._finalize_counts(summary)
+        except Exception as exc:  # pylint: disable=broad-except
+            summary.exception_message = str(exc)
+            summary.stack_trace = traceback.format_exc()
+            self.logger.exception("실행 엔진 실패")
+            raise
+        finally:
+            summary.total_elapsed_ms = int((perf_counter() - started) * 1000)
+            self.debug_reporter.write(paths.output_dir, summary)
+            self.logger.info(
+                "실행 엔진 v4 종료 - 성공:%d 경고:%d 실패:%d 건너뜀:%d",
+                summary.success_count,
+                summary.warning_count,
+                summary.failure_count,
+                summary.skipped_count,
+            )
+
+        return summary
+
+    def analyze_ppt_structure(self, template_path: Path, output_dir: Path) -> tuple[PptStructureReport, Path, Path]:
+        """PPT 구조 분석을 수행하고 구조 리포트를 저장한다."""
+
+        ensure_file(template_path, "PowerPoint 템플릿")
+        ensure_dir(output_dir, "출력")
+        self.logger.info("PPT 구조 분석 시작: %s", template_path)
+        report, json_path, md_path = self.ppt_analyzer.analyze(template_path, output_dir)
+        self.logger.info("PPT 구조 분석 완료: json=%s md=%s", json_path, md_path)
+        return report, json_path, md_path
 
     def _validate_input_paths(self, paths: AppPaths) -> None:
         ensure_file(paths.ppt_template, "PowerPoint 템플릿")
@@ -77,11 +121,7 @@ class AppController:
         ensure_dir(paths.output_dir, "출력")
 
     def _collect_sql_keys(self, bindings: list[ShapeBindingConfig]) -> set[str]:
-        keys: set[str] = set()
-        for b in bindings:
-            if b.enabled and b.sql_key:
-                keys.add(b.sql_key)
-        return keys
+        return {b.sql_key for b in bindings if b.enabled and b.sql_key}
 
     def _validate_sql_keys(self, required_keys: set[str], sql_map: dict[str, str]) -> None:
         missing = sorted([key for key in required_keys if key not in sql_map])
@@ -114,29 +154,85 @@ class AppController:
         template_path: Path,
         output_path: Path,
         query_results: dict[str, list[dict[str, Any]]],
-    ) -> dict[str, str]:
-        results: dict[str, str] = {}
+    ) -> list[ShapeExecutionResult]:
+        results: list[ShapeExecutionResult] = []
+
         with PowerPointSession(template_path, output_path, logger=self.logger) as ppt:
             for binding in bindings:
+                started = perf_counter()
+                started_at = format_korean_now()
+                row_count = len(query_results.get(binding.sql_key or "", []))
+                meta = self._build_meta(binding)
+
                 if not binding.enabled:
-                    self.logger.debug("비활성 바인딩 스킵: %s", binding.shape_name)
+                    results.append(
+                        ShapeExecutionResult(
+                            shape_name=binding.shape_name,
+                            shape_type="unknown",
+                            bind_type=binding.bind_type,
+                            sql_key=binding.sql_key,
+                            enabled=False,
+                            status="skipped",
+                            message="비활성 설정으로 건너뜀",
+                            row_count=row_count,
+                            started_at=started_at,
+                            ended_at=format_korean_now(),
+                            elapsed_ms=0,
+                            meta=meta,
+                        )
+                    )
                     continue
 
                 self.logger.info(
-                    "바인딩 처리 시작: shape=%s type=%s sql_key=%s",
+                    "바인딩 처리 시작: shape=%s type=%s sql_key=%s row_count=%d",
                     binding.shape_name,
                     binding.bind_type,
                     binding.sql_key,
+                    row_count,
                 )
 
                 try:
-                    result = self._dispatch_binder(ppt, binding, query_results)
-                    results[binding.shape_name] = result
-                    self.logger.info("바인딩 처리 결과: %s", result)
+                    message = self._dispatch_binder(ppt, binding, query_results)
+                    status = self._status_from_message(message)
+                    slide, shape = ppt.find_shape(binding.shape_name)
+                    shape_type = ppt.detect_shape_type(shape)
+                    elapsed_ms = int((perf_counter() - started) * 1000)
+                    meta = self._apply_message_meta(meta, binding.bind_type, message, row_count)
+                    result = ShapeExecutionResult(
+                        shape_name=binding.shape_name,
+                        shape_type=shape_type,
+                        bind_type=binding.bind_type,
+                        sql_key=binding.sql_key,
+                        enabled=True,
+                        status=status,
+                        message=message,
+                        row_count=row_count,
+                        started_at=started_at,
+                        ended_at=format_korean_now(),
+                        elapsed_ms=elapsed_ms,
+                        meta={**meta, "slide_index": slide},
+                    )
                 except Exception as exc:  # pylint: disable=broad-except
-                    msg = f"FAIL: {binding.shape_name} 처리 실패 - {exc}"
-                    results[binding.shape_name] = msg
-                    self.logger.exception(msg)
+                    elapsed_ms = int((perf_counter() - started) * 1000)
+                    meta = self._apply_message_meta(meta, binding.bind_type, message, row_count)
+                    result = ShapeExecutionResult(
+                        shape_name=binding.shape_name,
+                        shape_type="unknown",
+                        bind_type=binding.bind_type,
+                        sql_key=binding.sql_key,
+                        enabled=True,
+                        status="failed",
+                        message=str(exc),
+                        row_count=row_count,
+                        started_at=started_at,
+                        ended_at=format_korean_now(),
+                        elapsed_ms=elapsed_ms,
+                        meta=meta,
+                    )
+                    self.logger.exception("shape 처리 실패: %s", binding.shape_name)
+
+                results.append(result)
+                self.logger.info("바인딩 결과: %s -> %s", binding.shape_name, result.status)
 
             ppt.save_as_output()
 
@@ -161,23 +257,67 @@ class AppController:
         raise ValueError(f"지원하지 않는 bind_type입니다: {binding.bind_type}")
 
     @staticmethod
-    def _summarize_binding_status(binding_results: dict[str, str]) -> tuple[int, int, int]:
-        success_count = 0
-        warning_count = 0
-        failure_count = 0
-        for result in binding_results.values():
-            if result.startswith("OK:"):
-                success_count += 1
-            elif result.startswith("WARN:"):
-                warning_count += 1
-            else:
-                failure_count += 1
-        return success_count, warning_count, failure_count
+    def _status_from_message(message: str) -> str:
+        if message.startswith("OK:"):
+            return "success"
+        if message.startswith("WARN:"):
+            return "warning"
+        return "success"
+
+    @staticmethod
+    def _build_meta(binding: ShapeBindingConfig) -> dict[str, Any]:
+        meta: dict[str, Any] = {}
+        if binding.bind_type == "tbl":
+            meta = {"columns": binding.columns, "header_row": binding.header_row}
+        elif binding.bind_type == "tblr":
+            meta = {
+                "template_row": binding.template_row,
+                "generated_rows": 0,
+                "keep_template_row_if_empty": binding.keep_template_row_if_empty,
+                "clear_placeholders_if_empty": binding.clear_placeholders_if_empty,
+            }
+        elif binding.bind_type == "tblx":
+            meta = {
+                "header_row": binding.header_row,
+                "key_fields": binding.key_fields,
+                "anchor_count": 0,
+                "matched_count": 0,
+                "unmatched_count": 0,
+            }
+        elif binding.bind_type == "cht":
+            meta = {
+                "category_field": binding.category_field,
+                "series_fields": binding.series_fields,
+            }
+        return meta
+
+
+    @staticmethod
+    def _apply_message_meta(meta: dict[str, Any], bind_type: str, message: str, row_count: int) -> dict[str, Any]:
+        updated = dict(meta)
+        if bind_type == "tblr":
+            updated["generated_rows"] = row_count
+        if bind_type == "tblx":
+            # 예: "OK: tblx 채움 완료(shape) anchor=2 match=1 empty=1"
+            for token, key in (("anchor=", "anchor_count"), ("match=", "matched_count"), ("empty=", "unmatched_count")):
+                if token in message:
+                    try:
+                        updated[key] = int(message.split(token, 1)[1].split()[0])
+                    except Exception:
+                        pass
+        return updated
 
     @staticmethod
     def _build_output_name(prefix: str) -> str:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         return f"{prefix}_{stamp}.pptx"
+
+    @staticmethod
+    def _finalize_counts(summary: RunExecutionSummary) -> None:
+        summary.success_count = sum(1 for r in summary.shape_results if r.status == "success")
+        summary.warning_count = sum(1 for r in summary.shape_results if r.status == "warning")
+        summary.failure_count = sum(1 for r in summary.shape_results if r.status == "failed")
+        summary.skipped_count = sum(1 for r in summary.shape_results if r.status == "skipped")
 
     @staticmethod
     def normalize_paths(ppt_path: str, config_path: str, sql_dir: str, output_dir: str) -> AppPaths:
