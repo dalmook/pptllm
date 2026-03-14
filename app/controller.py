@@ -18,6 +18,8 @@ from app.binders.text_binder import TextBinder
 from app.config_loader import ConfigLoader
 from app.db import OracleExecutor
 from app.debug_reporter import DebugReporter
+from app.diff_helpers import make_unified_diff
+from app.hints_loader import load_hints
 from app.llm_helper import LLMHelper
 from app.map_generator import MapGenerator
 from app.models import (
@@ -27,11 +29,14 @@ from app.models import (
     ReportMap,
     ReportMapDraft,
     RunExecutionSummary,
+    SqlDraftBatchSummary,
+    SqlDraftResult,
     ShapeBindingConfig,
     ShapeExecutionResult,
 )
 from app.ppt_analyzer import PptAnalyzer
 from app.ppt_session import PowerPointSession
+from app.sql_validators import validate_sql_draft
 from app.sql_loader import SqlLoader
 from app.utils.file_helpers import ensure_dir, ensure_file
 from app.utils.formatters import format_korean_now
@@ -147,6 +152,143 @@ class AppController:
         json_path, md_path = self.map_generator.write(output_dir, draft)
         self.logger.info("LLM map 초안 생성 완료: json=%s md=%s", json_path, md_path)
         return draft, json_path, md_path
+
+
+    def generate_sql_drafts(
+        self,
+        template_path: Path,
+        output_dir: Path,
+        sql_dir: Path,
+        map_path: Path | None = None,
+        target_shape_name: str | None = None,
+        hints_path: Path | None = None,
+        user_hints_text: str | None = None,
+    ) -> SqlDraftBatchSummary:
+        """map/ppt_structure 기반 SQL 초안을 생성해 output/sql_drafts에 저장한다."""
+
+        ensure_file(template_path, "PowerPoint 템플릿")
+        ensure_dir(output_dir, "출력")
+        ensure_dir(sql_dir, "SQL")
+
+        structure = self._load_or_analyze_structure(template_path, output_dir)
+        sql_keys = sorted(self.sql_loader.scan(sql_dir).keys())
+        hints = load_hints(hints_path)
+
+        if map_path and map_path.exists():
+            map_draft = self._load_map_draft(map_path)
+        else:
+            map_json = output_dir / "report_map.generated.json"
+            if map_json.exists():
+                map_draft = self._load_map_draft(map_json)
+            else:
+                helper = LLMHelper.from_env()
+                map_draft = helper.generate_report_map_draft(structure, sql_keys, user_hints_text)
+                self.map_generator.write(output_dir, map_draft)
+
+        bindings = map_draft.bindings
+        if target_shape_name:
+            bindings = [b for b in bindings if b.shape_name == target_shape_name]
+            if not bindings:
+                raise ValueError(f"선택한 shape를 map 초안에서 찾지 못했습니다: {target_shape_name}")
+
+        shapes_by_name = {s.shape_name: s for lst in structure.by_slide.values() for s in lst}
+        helper = LLMHelper.from_env()
+        drafts = helper.generate_sql_drafts_for_bindings(bindings, shapes_by_name, sql_keys, hints)
+
+        drafts_dir = output_dir / "sql_drafts"
+        drafts_dir.mkdir(parents=True, exist_ok=True)
+
+        success = warning = failed = 0
+        results: list[SqlDraftResult] = []
+
+        for d in drafts:
+            existing = sql_dir / f"{d.sql_key}.sql"
+            if not existing.exists():
+                existing = sql_dir / f"{d.sql_key.lower()}.sql"
+            if existing.exists():
+                d.existing_sql_path = str(existing)
+                d.diff_text = make_unified_diff(existing.read_text(encoding="utf-8", errors="ignore"), d.sql_text, str(existing), f"draft/{d.sql_key}.sql")
+
+            status, warn = validate_sql_draft(d)
+            d.status = status
+            if warn:
+                d.review_points.extend(warn)
+
+            sql_path = drafts_dir / f"{d.sql_key}.sql"
+            md_path = drafts_dir / f"{d.sql_key}.md"
+            sql_path.write_text(d.sql_text.strip() + "\n", encoding="utf-8")
+            md_path.write_text(self._sql_draft_markdown(d), encoding="utf-8")
+
+            if status == "success":
+                success += 1
+            elif status == "warning":
+                warning += 1
+            else:
+                failed += 1
+            results.append(d)
+
+        return SqlDraftBatchSummary(
+            output_dir=str(drafts_dir),
+            total=len(results),
+            success_count=success,
+            warning_count=warning,
+            failure_count=failed,
+            results=results,
+        )
+
+    def _load_or_analyze_structure(self, template_path: Path, output_dir: Path) -> PptStructureReport:
+        structure_json = output_dir / "ppt_structure.json"
+        if structure_json.exists():
+            return self._load_structure_report(structure_json)
+        report, _, _ = self.analyze_ppt_structure(template_path, output_dir)
+        return report
+
+    def _load_map_draft(self, path: Path) -> ReportMapDraft:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        from app.models import MapDraftBinding
+        return ReportMapDraft(
+            generated_at=payload.get("generated_at", ""),
+            source_ppt=payload.get("source_ppt", ""),
+            llm_provider=payload.get("llm_provider", ""),
+            llm_model=payload.get("llm_model", ""),
+            bindings=[MapDraftBinding(**item) for item in payload.get("bindings", []) if isinstance(item, dict)],
+        )
+
+    @staticmethod
+    def _sql_draft_markdown(d: SqlDraftResult) -> str:
+        lines = [
+            f"# SQL Draft - {d.sql_key}",
+            "",
+            f"- shape_name: {d.shape_name}",
+            f"- bind_type: {d.bind_type}",
+            f"- sql_key: {d.sql_key}",
+            f"- generated_at: {d.generated_at}",
+            f"- llm_provider/model: {d.llm_provider}/{d.llm_model}",
+            f"- confidence: {d.confidence:.2f}",
+            f"- status: {d.status}",
+            f"- 기존 SQL 존재: {'예' if d.existing_sql_path else '아니오'}",
+            "",
+            "## expected_output_columns",
+            str(d.expected_output_columns),
+            "",
+            "## assumptions",
+            *[f"- {x}" for x in d.assumptions],
+            "",
+            "## notes",
+            *[f"- {x}" for x in d.notes],
+            "",
+            "## 검토 포인트",
+            *[f"- {x}" for x in d.review_points],
+            "",
+            "## draft SQL",
+            "```sql",
+            d.sql_text.strip(),
+            "```",
+        ]
+        if d.diff_text:
+            lines += ["", "## 기존 SQL 대비 diff", "```diff", d.diff_text, "```"]
+        lines.append("")
+        return "\n".join(lines)
 
     def _validate_input_paths(self, paths: AppPaths) -> None:
         ensure_file(paths.ppt_template, "PowerPoint 템플릿")

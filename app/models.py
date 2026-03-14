@@ -156,3 +156,37 @@ class ReportMapDraft:
     llm_provider: str
     llm_model: str
     bindings: list[MapDraftBinding] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class SqlDraftResult:
+    """shape/binding 단위 SQL 초안 결과."""
+
+    generated_at: str
+    shape_name: str
+    sql_key: str
+    bind_type: str
+    llm_provider: str
+    llm_model: str
+    confidence: float
+    assumptions: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+    expected_output_columns: list[str] = field(default_factory=list)
+    review_points: list[str] = field(default_factory=list)
+    sql_text: str = ""
+    status: str = "success"
+    existing_sql_path: str | None = None
+    diff_text: str | None = None
+    meta: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class SqlDraftBatchSummary:
+    """SQL 초안 배치 생성 요약."""
+
+    output_dir: str
+    total: int
+    success_count: int
+    warning_count: int
+    failure_count: int
+    results: list[SqlDraftResult] = field(default_factory=list)

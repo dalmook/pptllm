@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
 from typing import Any
 
-from app.models import PptShapeAnalysis, PptStructureReport
+from app.models import MapDraftBinding, PptShapeAnalysis, PptStructureReport
 
 
 def _compact_shape(shape: PptShapeAnalysis) -> dict[str, Any]:
@@ -26,13 +25,7 @@ def _compact_shape(shape: PptShapeAnalysis) -> dict[str, Any]:
     }
 
 
-def build_map_generation_payload(
-    structure: PptStructureReport,
-    sql_keys: list[str],
-    user_hints: str | None = None,
-) -> dict[str, Any]:
-    """LLM 전달용 간결 payload를 만든다."""
-
+def build_map_generation_payload(structure: PptStructureReport, sql_keys: list[str], user_hints: str | None = None) -> dict[str, Any]:
     shapes: list[dict[str, Any]] = []
     for slide_index in sorted(structure.by_slide.keys()):
         for shape in structure.by_slide[slide_index]:
@@ -44,42 +37,48 @@ def build_map_generation_payload(
         "sql_keys": sql_keys,
         "user_hints": user_hints or "",
         "shapes": shapes,
-        "output_schema": {
-            "bindings": [
-                {
-                    "shape_name": "string",
-                    "slide_index": "int",
-                    "recommended_bind_type": "text|tbl|tblr|tblx|cht|none",
-                    "sql_key_candidate": "string|null",
-                    "header_row": "int|null",
-                    "template_row": "int|null",
-                    "key_fields": ["string"],
-                    "columns": ["string"],
-                    "category_field": "string|null",
-                    "series_fields": ["string"],
-                    "enabled": "bool",
-                    "confidence": "0.0~1.0",
-                    "reason": "string",
-                    "notes": ["string"],
-                }
-            ]
-        },
     }
 
 
 def build_map_generation_prompt(payload: dict[str, Any]) -> str:
-    """OpenAI-compatible 모델에 전달할 system/user 지시 문자열을 생성한다."""
-
     return (
-        "당신은 PowerPoint 자동화 설정 초안을 만드는 도우미입니다. "
-        "반드시 JSON만 출력하세요. markdown 금지. \n"
-        "규칙: bind_type은 text/tbl/tblr/tblx/cht/none 중 하나, confidence는 0~1. "
-        "완벽한 정답이 아니라 '초안'임을 notes에 포함하세요. \n"
-        f"입력 payload: {asdict_like(payload)}"
+        "반드시 JSON만 출력하세요. report_map 초안을 생성하세요. "
+        "bind_type은 text/tbl/tblr/tblx/cht/none 중 하나여야 하며 confidence는 0~1 범위여야 합니다. "
+        "notes에는 반드시 사람이 검토해야 한다는 문구를 포함하세요. "
+        f"입력 payload: {payload}"
     )
 
 
-def asdict_like(data: Any) -> str:
-    """외부 의존성 없이 prompt에 넣기 위한 문자열화."""
+def build_sql_generation_payload(
+    binding: MapDraftBinding,
+    shape: PptShapeAnalysis | None,
+    sql_keys: list[str],
+    user_hint: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "task": "generate_oracle_sql_draft",
+        "shape_name": binding.shape_name,
+        "slide_index": binding.slide_index,
+        "bind_type": binding.recommended_bind_type,
+        "sql_key_candidate": binding.sql_key_candidate,
+        "header_row": binding.header_row,
+        "template_row": binding.template_row,
+        "key_fields": binding.key_fields,
+        "columns": binding.columns,
+        "category_field": binding.category_field,
+        "series_fields": binding.series_fields,
+        "shape_info": _compact_shape(shape) if shape else {},
+        "available_sql_keys": sql_keys,
+        "user_hint": user_hint or {},
+    }
 
-    return str(data)
+
+def build_sql_generation_prompt(payload: dict[str, Any]) -> str:
+    return (
+        "당신은 Oracle SQL 초안 생성기입니다. 반드시 JSON만 출력하세요. "
+        "필수 필드: sql_key, confidence, assumptions, notes, expected_output_columns, review_points, sql_text. "
+        "sql_text는 바로 파일 저장 가능한 Oracle SQL 이어야 하며 불필요한 컬럼을 최소화하세요. "
+        "tblx는 key_fields + header alias 구조를 맞추고 CASE WHEN/집계 패턴을 고려하세요. "
+        "이 결과는 초안이며 사람이 검토해야 함을 notes에 포함하세요. "
+        f"입력 payload: {payload}"
+    )

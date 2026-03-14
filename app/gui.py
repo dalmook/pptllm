@@ -64,7 +64,8 @@ class ReportAutomationApp(tk.Tk):
 
         ttk.Button(btn_frame, text="실행", command=self._on_run_clicked).pack(side="left", padx=(0, 8))
         ttk.Button(btn_frame, text="PPT 구조 분석", command=self._on_analyze_clicked).pack(side="left", padx=(0, 8))
-        ttk.Button(btn_frame, text="LLM으로 map 초안 생성", command=self._on_generate_map_clicked).pack(side="left")
+        ttk.Button(btn_frame, text="LLM으로 map 초안 생성", command=self._on_generate_map_clicked).pack(side="left", padx=(0, 8))
+        ttk.Button(btn_frame, text="LLM으로 SQL 초안 생성", command=self._on_generate_sql_clicked).pack(side="left")
 
         ttk.Label(frame, textvariable=self.last_files_var).grid(row=5, column=0, columnspan=3, sticky="w")
         ttk.Label(frame, text="실행 로그").grid(row=6, column=0, columnspan=3, sticky="w", pady=(8, 4))
@@ -167,6 +168,56 @@ class ReportAutomationApp(tk.Tk):
             self.status_var.set("오류")
             self.logger.exception("구조 분석 중 오류 발생")
             messagebox.showerror("오류", f"구조 분석에 실패했습니다.\n원인: {exc}")
+
+
+    def _on_generate_sql_clicked(self) -> None:
+        try:
+            self.status_var.set("SQL 초안 생성 중...")
+            template = Path(self.ppt_var.get()).expanduser()
+            output_dir = Path(self.output_dir_var.get()).expanduser()
+            sql_dir = Path(self.sql_dir_var.get()).expanduser()
+
+            target = simpledialog.askstring(
+                "대상 shape",
+                "특정 shape_name만 생성하려면 입력(전체는 비워두기):",
+                parent=self,
+            )
+
+            hints_path = None
+            if messagebox.askyesno("힌트 파일", "sql_hints.json 파일을 선택하시겠습니까?", parent=self):
+                picked = filedialog.askopenfilename(
+                    title="sql_hints.json 선택", filetypes=[("JSON", "*.json"), ("All Files", "*.*")]
+                )
+                if picked:
+                    hints_path = Path(picked)
+
+            hints_text = simpledialog.askstring(
+                "추가 힌트",
+                "선택적으로 SQL 생성 힌트를 입력하세요:",
+                parent=self,
+            )
+
+            summary = self.controller.generate_sql_drafts(
+                template_path=template,
+                output_dir=output_dir,
+                sql_dir=sql_dir,
+                target_shape_name=(target or None),
+                hints_path=hints_path,
+                user_hints_text=hints_text,
+            )
+
+            self.status_var.set("SQL 초안 생성 완료")
+            self.last_files_var.set(f"최근 생성 파일: {summary.output_dir}")
+            messagebox.showinfo(
+                "SQL 초안 생성 완료",
+                f"출력 폴더: {summary.output_dir}\n"
+                f"총 {summary.total}건 / 성공 {summary.success_count} / 경고 {summary.warning_count} / 실패 {summary.failure_count}\n"
+                "※ 기존 sql 폴더 파일은 덮어쓰지 않았습니다.",
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            self.status_var.set("오류")
+            self.logger.exception("SQL 초안 생성 중 오류 발생")
+            messagebox.showerror("오류", f"SQL 초안 생성에 실패했습니다.\n원인: {exc}")
 
     def _on_generate_map_clicked(self) -> None:
         try:
