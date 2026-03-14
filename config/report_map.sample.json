@@ -1,0 +1,26 @@
+{
+  "report_name": "주간 실적 보고서",
+  "db": {
+    "user": "SCOTT",
+    "password": "TIGER",
+    "dsn": "127.0.0.1:1521/ORCLPDB1"
+  },
+  "binders": {
+    "text": [
+      "TODAY",
+      "SALES__TOTAL"
+    ],
+    "tbl": [
+      "SALES_TABLE"
+    ],
+    "tblr": [
+      "TOP10_TEMPLATE"
+    ],
+    "tblx": [
+      "MONTHLY_ANCHOR"
+    ],
+    "chart": [
+      "SALES_CHART"
+    ]
+  }
+}
