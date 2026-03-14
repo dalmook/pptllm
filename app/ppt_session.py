@@ -102,6 +102,10 @@ class PowerPointSession:
         return bool(getattr(shape, "HasTable", False))
 
     @staticmethod
+    def is_chart_shape(shape: Any) -> bool:
+        return bool(getattr(shape, "HasChart", False))
+
+    @staticmethod
     def get_table_cell_text(shape: Any, row: int, col: int) -> str:
         return str(shape.Table.Cell(row, col).Shape.TextFrame.TextRange.Text)
 
@@ -112,6 +116,59 @@ class PowerPointSession:
     @staticmethod
     def table_size(shape: Any) -> tuple[int, int]:
         return int(shape.Table.Rows.Count), int(shape.Table.Columns.Count)
+
+    @staticmethod
+    def add_table_row(shape: Any, row_index: int) -> None:
+        shape.Table.Rows.Add(row_index)
+
+    def clone_table_row_text(self, shape: Any, source_row: int, target_row: int) -> None:
+        """행의 셀 텍스트를 복제한다(서식은 COM 기본 동작에 의존)."""
+
+        _, cols = self.table_size(shape)
+        for col in range(1, cols + 1):
+            try:
+                src = self.get_table_cell_text(shape, source_row, col)
+                self.set_table_cell_text(shape, target_row, col, src)
+            except Exception:  # pylint: disable=broad-except
+                continue
+
+    def table_has_merge_risk(self, shape: Any, row: int) -> bool:
+        """병합 셀로 인한 위험 징후를 간단히 탐지한다."""
+
+        _, cols = self.table_size(shape)
+        for col in range(1, cols + 1):
+            try:
+                _ = shape.Table.Cell(row, col)
+            except Exception:  # pylint: disable=broad-except
+                return True
+        return False
+
+    def update_chart_data(self, shape: Any, category_name: str, series_names: list[str], rows: list[list[Any]]) -> None:
+        """차트 데이터시트를 열어 category + series 데이터를 교체한다."""
+
+        chart = shape.Chart
+        chart.ChartData.Activate()
+        workbook = chart.ChartData.Workbook
+        worksheet = workbook.Worksheets(1)
+
+        max_rows = max(2, len(rows) + 1)
+        max_cols = max(2, len(series_names) + 1)
+
+        for r in range(1, 300):
+            for c in range(1, 30):
+                worksheet.Cells(r, c).Value = None
+
+        worksheet.Cells(1, 1).Value = category_name
+        for index, series_name in enumerate(series_names, start=2):
+            worksheet.Cells(1, index).Value = series_name
+
+        for row_index, data_row in enumerate(rows, start=2):
+            for col_index, value in enumerate(data_row, start=1):
+                worksheet.Cells(row_index, col_index).Value = value
+
+        end_col = chr(ord("A") + max_cols - 1)
+        chart.SetSourceData(f"=Sheet1!$A$1:${end_col}${max_rows}")
+        workbook.Application.Quit()
 
     def _validate_paths(self) -> None:
         if not self.template_path.exists():

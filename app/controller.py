@@ -21,7 +21,7 @@ from app.utils.file_helpers import ensure_dir, ensure_file
 
 
 class AppController:
-    """실행 엔진 v1 컨트롤러."""
+    """실행 엔진 v3 컨트롤러."""
 
     def __init__(self, logger: logging.Logger) -> None:
         self.logger = logger
@@ -34,9 +34,9 @@ class AppController:
         self.chart_binder = ChartBinder(logger=logger)
 
     def run(self, paths: AppPaths) -> ExecutionSummary:
-        """실행 엔진 v1 전체 흐름을 수행한다."""
+        """실행 엔진 전체 흐름을 수행한다."""
 
-        self.logger.info("실행 엔진 v1 시작")
+        self.logger.info("실행 엔진 v3 시작")
         self._validate_input_paths(paths)
 
         report_map = self.config_loader.load(paths.config_file)
@@ -52,12 +52,22 @@ class AppController:
         output_file = paths.output_dir / self._build_output_name(report_map.output_filename_prefix)
         binding_results = self._run_binders(report_map.bindings, paths.ppt_template, output_file, query_results)
 
-        self.logger.info("실행 엔진 v1 완료")
+        success_count, warning_count, failure_count = self._summarize_binding_status(binding_results)
+
+        self.logger.info(
+            "실행 엔진 v3 완료 - 성공:%d 경고:%d 실패:%d",
+            success_count,
+            warning_count,
+            failure_count,
+        )
         return ExecutionSummary(
             report_name=report_map.report_name,
             output_file=output_file,
             sql_count=len(query_results),
             binding_results=binding_results,
+            success_count=success_count,
+            warning_count=warning_count,
+            failure_count=failure_count,
         )
 
     def _validate_input_paths(self, paths: AppPaths) -> None:
@@ -95,6 +105,7 @@ class AppController:
             for sql_key in sorted(required_sql_keys):
                 self.logger.info("SQL 실행: %s", sql_key)
                 query_results[sql_key] = oracle.query(sql_map[sql_key])
+                self.logger.debug("SQL 실행 결과: key=%s rows=%d", sql_key, len(query_results[sql_key]))
         return query_results
 
     def _run_binders(
@@ -111,23 +122,57 @@ class AppController:
                     self.logger.debug("비활성 바인딩 스킵: %s", binding.shape_name)
                     continue
 
-                self.logger.info("바인딩 처리: shape=%s type=%s", binding.shape_name, binding.bind_type)
-                if binding.bind_type == "text":
-                    results[binding.shape_name] = self.text_binder.bind(ppt, binding, query_results)
-                elif binding.bind_type == "tbl":
-                    results[binding.shape_name] = self.table_binder.bind(ppt, binding, query_results)
-                elif binding.bind_type == "tblr":
-                    results[binding.shape_name] = self.repeat_row_binder.bind(ppt, binding, query_results)
-                elif binding.bind_type == "tblx":
-                    results[binding.shape_name] = self.anchor_fill_binder.bind(ppt, binding, query_results)
-                elif binding.bind_type == "cht":
-                    results[binding.shape_name] = self.chart_binder.bind(ppt, binding, query_results)
-                else:
-                    self.logger.warning("지원하지 않는 bind_type입니다: %s", binding.bind_type)
+                self.logger.info(
+                    "바인딩 처리 시작: shape=%s type=%s sql_key=%s",
+                    binding.shape_name,
+                    binding.bind_type,
+                    binding.sql_key,
+                )
+
+                try:
+                    result = self._dispatch_binder(ppt, binding, query_results)
+                    results[binding.shape_name] = result
+                    self.logger.info("바인딩 처리 결과: %s", result)
+                except Exception as exc:  # pylint: disable=broad-except
+                    msg = f"FAIL: {binding.shape_name} 처리 실패 - {exc}"
+                    results[binding.shape_name] = msg
+                    self.logger.exception(msg)
 
             ppt.save_as_output()
 
         return results
+
+    def _dispatch_binder(
+        self,
+        ppt: PowerPointSession,
+        binding: ShapeBindingConfig,
+        query_results: dict[str, list[dict[str, Any]]],
+    ) -> str:
+        if binding.bind_type == "text":
+            return self.text_binder.bind(ppt, binding, query_results)
+        if binding.bind_type == "tbl":
+            return self.table_binder.bind(ppt, binding, query_results)
+        if binding.bind_type == "tblr":
+            return self.repeat_row_binder.bind(ppt, binding, query_results)
+        if binding.bind_type == "tblx":
+            return self.anchor_fill_binder.bind(ppt, binding, query_results)
+        if binding.bind_type == "cht":
+            return self.chart_binder.bind(ppt, binding, query_results)
+        raise ValueError(f"지원하지 않는 bind_type입니다: {binding.bind_type}")
+
+    @staticmethod
+    def _summarize_binding_status(binding_results: dict[str, str]) -> tuple[int, int, int]:
+        success_count = 0
+        warning_count = 0
+        failure_count = 0
+        for result in binding_results.values():
+            if result.startswith("OK:"):
+                success_count += 1
+            elif result.startswith("WARN:"):
+                warning_count += 1
+            else:
+                failure_count += 1
+        return success_count, warning_count, failure_count
 
     @staticmethod
     def _build_output_name(prefix: str) -> str:

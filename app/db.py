@@ -40,6 +40,7 @@ class OracleExecutor:
         if self._conn is None:
             raise RuntimeError("DB 연결이 초기화되지 않았습니다. 먼저 connect()를 호출하세요.")
 
+        cursor = None
         try:
             cursor = self._conn.cursor()
             cursor.execute(sql)
@@ -51,10 +52,11 @@ class OracleExecutor:
         except Exception as exc:  # pylint: disable=broad-except
             raise RuntimeError(f"SQL 실행 중 오류가 발생했습니다: {exc}") from exc
         finally:
-            try:
-                cursor.close()
-            except Exception:  # pylint: disable=broad-except
-                pass
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception:  # pylint: disable=broad-except
+                    pass
 
     def close(self) -> None:
         """연결을 종료한다."""

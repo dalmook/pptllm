@@ -36,7 +36,7 @@ class ReportAutomationApp(tk.Tk):
         self.controller = controller
         self.logger = logger
 
-        self.title("PPT 보고서 자동화 도구 (Engine v1)")
+        self.title("PPT 보고서 자동화 도구 (Engine v3)")
         self.geometry("920x680")
 
         self.ppt_var = tk.StringVar()
@@ -131,6 +131,7 @@ class ReportAutomationApp(tk.Tk):
                 "실행이 완료되었습니다.\n"
                 f"리포트: {summary.report_name}\n"
                 f"실행 SQL 수: {summary.sql_count}\n"
+                f"성공/경고/실패: {summary.success_count}/{summary.warning_count}/{summary.failure_count}\n"
                 f"결과 파일: {summary.output_file}",
             )
         except Exception as exc:  # pylint: disable=broad-except

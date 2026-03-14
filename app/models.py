@@ -34,6 +34,9 @@ class ShapeBindingConfig:
     series_fields: list[str] = field(default_factory=list)
     clear_existing: bool = True
     enabled: bool = True
+    strict_match: bool = False
+    keep_template_row_if_empty: bool = True
+    clear_placeholders_if_empty: bool = True
 
 
 @dataclass(slots=True)
@@ -54,4 +57,7 @@ class ExecutionSummary:
     output_file: Path
     sql_count: int
     binding_results: dict[str, str] = field(default_factory=dict)
+    success_count: int = 0
+    warning_count: int = 0
+    failure_count: int = 0
     extra: dict[str, Any] = field(default_factory=dict)

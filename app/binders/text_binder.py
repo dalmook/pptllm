@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime
 from typing import Any
 
 from app.models import ShapeBindingConfig
 from app.ppt_session import PowerPointSession
+from app.utils.formatters import to_display_text, today_text
 
 _PLACEHOLDER_PATTERN = re.compile(r"\{\{\s*([A-Za-z0-9_]+(?:__\d+__?[A-Za-z0-9_]+|__[A-Za-z0-9_]+)?)\s*\}\}")
 
@@ -53,7 +53,7 @@ class TextBinder:
                 ppt.set_shape_text(shape, new_text)
                 replaced_count += cnt
 
-        return f"text 치환 완료({binding.shape_name}): {replaced_count}건"
+        return f"OK: text 치환 완료({binding.shape_name}) {replaced_count}건"
 
     def _replace_placeholders(
         self,
@@ -79,7 +79,7 @@ class TextBinder:
         query_results: dict[str, list[dict[str, Any]]],
     ) -> str | None:
         if token.upper() == "TODAY":
-            return datetime.now().strftime("%Y-%m-%d")
+            return today_text()
 
         parts = token.split("__")
         if len(parts) == 2:
@@ -106,9 +106,5 @@ class TextBinder:
             return ""
 
         row = rows[row_num - 1]
-        if field not in row:
-            self.logger.debug("필드 미존재: sql_key=%s field=%s", sql_key, field)
-            return ""
-
-        value = row[field]
-        return "" if value is None else str(value)
+        value = row.get(field)
+        return to_display_text(value)

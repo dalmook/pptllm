@@ -7,6 +7,7 @@ from typing import Any
 
 from app.models import ShapeBindingConfig
 from app.ppt_session import PowerPointSession
+from app.utils.formatters import to_display_text
 
 
 class TableBinder:
@@ -28,7 +29,7 @@ class TableBinder:
         columns = binding.columns or (list(rows[0].keys()) if rows else [])
         if not columns:
             self.logger.warning("tbl 바인딩에 사용할 컬럼이 없습니다: %s", binding.shape_name)
-            return f"tbl 바인딩 스킵({binding.shape_name}): 컬럼 없음"
+            return f"WARN: tbl 스킵({binding.shape_name}) 컬럼 없음"
 
         slide_index, shape = ppt.find_shape(binding.shape_name)
         if not ppt.is_table_shape(shape):
@@ -65,10 +66,15 @@ class TableBinder:
             data = rows[offset]
             row_index = data_start_row + offset
             for col_index, col_name in enumerate(columns, start=1):
-                value = data.get(col_name)
-                ppt.set_table_cell_text(shape, row_index, col_index, "" if value is None else str(value))
+                ppt.set_table_cell_text(shape, row_index, col_index, to_display_text(data.get(col_name)))
 
         self.logger.debug(
-            "tbl binder 완료: slide=%s shape=%s rows=%d", slide_index, binding.shape_name, to_write
+            "tbl binder 완료: slide=%s shape=%s sql_key=%s rows=%d",
+            slide_index,
+            binding.shape_name,
+            binding.sql_key,
+            to_write,
         )
-        return f"tbl 채움 완료({binding.shape_name}): {to_write}행"
+        if len(rows) > writable_rows:
+            return f"WARN: tbl 채움 완료({binding.shape_name}) {to_write}행, 일부 잘림"
+        return f"OK: tbl 채움 완료({binding.shape_name}) {to_write}행"

@@ -20,6 +20,32 @@
       "header_row": 1,
       "clear_existing": true,
       "enabled": true
+    },
+    {
+      "shape_name": "tbl_repeat",
+      "bind_type": "tblr",
+      "sql_key": "daily_rows",
+      "template_row": 4,
+      "enabled": true,
+      "keep_template_row_if_empty": true,
+      "clear_placeholders_if_empty": true
+    },
+    {
+      "shape_name": "tbl_anchor",
+      "bind_type": "tblx",
+      "sql_key": "pmix_qtr",
+      "header_row": 1,
+      "key_fields": ["FAM1", "USERFAM1", "DR"],
+      "strict_match": false,
+      "enabled": true
+    },
+    {
+      "shape_name": "cht_trend",
+      "bind_type": "cht",
+      "sql_key": "sales_trend",
+      "category_field": "MONTH",
+      "series_fields": ["QTY", "AMT"],
+      "enabled": true
     }
   ]
 }
