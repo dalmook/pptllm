@@ -14,14 +14,28 @@
   - `output/sql_drafts/{SQL_KEY}.md`
 - 기존 `sql/*.sql` 자동 overwrite 금지 (draft 폴더로만 저장)
 
-## LLM Provider 설정
+## LLM Provider 설정 (Windows CMD 상세)
 
-### Mock provider (기본)
+기본값은 `mock`입니다. 즉, 아무 설정 없이 실행하면 실제 LLM 호출 없이 휴리스틱 초안만 생성합니다.
+
+### 1) Mock → 실제 LLM으로 바꾸는 핵심
+
+아래 1줄이 가장 중요합니다.
+
 ```cmd
-set LLM_PROVIDER=mock
+set LLM_PROVIDER=openai_compatible
 ```
 
-### OpenAI-compatible provider
+또는 GPT-OSS를 쓸 경우:
+
+```cmd
+set LLM_PROVIDER=gpt_oss
+```
+
+`LLM_PROVIDER=mock` 상태면 API 키를 넣어도 외부 LLM을 호출하지 않습니다.
+
+### 2) OpenAI-compatible provider 설정
+
 ```cmd
 set LLM_PROVIDER=openai_compatible
 set LLM_BASE_URL=https://api.openai.com/v1
@@ -31,14 +45,12 @@ set LLM_API_STYLE=auto
 ```
 
 - `LLM_API_STYLE`
-  - `auto`(기본): `responses` 호출을 먼저 시도하고 실패 시 `chat.completions`로 fallback
-  - `responses`: `gpt_oss_example.py`와 유사한 Responses API만 사용
+  - `auto`(권장): `responses` 먼저 시도 후 실패하면 `chat.completions` fallback
+  - `responses`: Responses API만 사용
   - `chat`: Chat Completions API만 사용
 
-`.env.example` 참고.
+### 3) GPT-OSS gateway provider 설정
 
-
-### GPT-OSS gateway provider
 ```cmd
 set LLM_PROVIDER=gpt_oss
 set GPT_OSS_API_URL=http://apigw.samsungds.net:8000/gpt-oss/1/gpt-oss-120b/v1/chat/completions
@@ -49,18 +61,73 @@ set GPT_OSS_SEND_SYSTEM_NAME=GOC_MAIL_RAG_PIPELINE
 set GPT_OSS_MODEL=openai/gpt-oss-120b
 ```
 
-제공해주신 `gpt_oss_example.py`와 동일하게 `x-dep-ticket`, `Send-System-Name`, `User-Id`, `User-Type`, `Prompt-Msg-Id`, `Completion-Msg-Id` 헤더를 사용해 호출합니다.
+이 모드는 제공해주신 `gpt_oss_example.py`와 동일하게 아래 헤더를 포함해 호출합니다.
+- `x-dep-ticket`
+- `Send-System-Name`
+- `User-Id`
+- `User-Type`
+- `Prompt-Msg-Id`
+- `Completion-Msg-Id`
 
+### 4) CMD에서 즉시 적용 vs 영구 적용
 
-## Windows CMD 실행
+- 현재 CMD 창에서만 적용: `set KEY=value`
+- 새 CMD에도 유지(영구): `setx KEY "value"`
+
+예시:
 
 ```cmd
+setx LLM_PROVIDER "openai_compatible"
+setx LLM_BASE_URL "https://api.openai.com/v1"
+setx LLM_MODEL "gpt-4o-mini"
+setx LLM_API_KEY "YOUR_API_KEY"
+```
+
+> `setx`는 **새로 연 CMD 창**부터 반영됩니다.
+
+### 5) 설정 확인 방법
+
+```cmd
+echo %LLM_PROVIDER%
+echo %LLM_BASE_URL%
+echo %LLM_MODEL%
+```
+
+### 6) 자주 하는 실수 체크리스트
+
+- `%LLM_PROVIDER%`가 여전히 `mock`인지 확인
+- API Key 누락/오타 확인
+- 사내망/프록시 환경에서 `LLM_BASE_URL` 접근 가능 여부 확인
+- GPT-OSS 사용 시 `GPT_OSS_CREDENTIAL_KEY` 만료 여부 확인
+
+`.env.example` 참고.
+
+
+
+## Windows CMD 실행 (처음부터 순서대로)
+
+```cmd
+cd /d C:\path\to\pptllm
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
+```
+
+1. 먼저 LLM provider를 선택합니다.
+   - 빠른 테스트: `set LLM_PROVIDER=mock`
+   - 실제 LLM: 위 "LLM Provider 설정" 섹션대로 환경변수 설정
+2. Oracle DB 사용 시 "Oracle 연결 설정"도 함께 설정합니다.
+3. 앱 실행:
+
+```cmd
 python -m app.main
 ```
 
+4. GUI에서 순서 권장:
+   - `PPT 구조 분석`
+   - `LLM으로 map 초안 생성`
+   - `LLM으로 SQL 초안 생성`
+   - (검토 후) `실행`
 
 ## Oracle 연결 설정
 
