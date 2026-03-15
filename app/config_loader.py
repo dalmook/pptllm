@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -31,9 +32,22 @@ class ConfigLoader:
         db = payload.get("db")
         if not isinstance(db, dict):
             raise ValueError("설정 파일의 'db'는 객체여야 합니다.")
-        for key in ("user", "password", "dsn"):
-            if not isinstance(db.get(key), str) or not db.get(key).strip():
-                raise ValueError(f"db.{key}는 비어있지 않은 문자열이어야 합니다.")
+
+        db_user = self._resolve_db_value(db.get("user"), "ORACLE_USER", "DB_USER")
+        db_password = self._resolve_db_value(db.get("password"), "ORACLE_PW", "ORACLE_PASSWORD", "DB_PASSWORD")
+        db_dsn = self._resolve_db_value(db.get("dsn"), "ORACLE_DSN", "DB_DSN")
+
+        if not db_dsn:
+            db_dsn = self._build_dsn_from_env()
+
+        if not db_user:
+            raise ValueError("DB 사용자 정보가 없습니다. report_map.db.user 또는 ORACLE_USER를 설정하세요.")
+        if not db_password:
+            raise ValueError("DB 비밀번호 정보가 없습니다. report_map.db.password 또는 ORACLE_PW를 설정하세요.")
+        if not db_dsn:
+            raise ValueError(
+                "DB DSN 정보가 없습니다. report_map.db.dsn 또는 ORACLE_DSN(또는 ORACLE_HOST/ORACLE_PORT/ORACLE_SERVICE)을 설정하세요."
+            )
 
         raw_bindings = payload.get("bindings")
         if not isinstance(raw_bindings, list) or not raw_bindings:
@@ -47,10 +61,29 @@ class ConfigLoader:
 
         return ReportMap(
             report_name=report_name,
-            db={"user": db["user"].strip(), "password": db["password"].strip(), "dsn": db["dsn"].strip()},
+            db={"user": db_user, "password": db_password, "dsn": db_dsn},
             output_filename_prefix=output_prefix,
             bindings=bindings,
         )
+
+    @staticmethod
+    def _resolve_db_value(config_value: Any, *env_keys: str) -> str:
+        if isinstance(config_value, str) and config_value.strip():
+            return config_value.strip()
+        for key in env_keys:
+            value = os.getenv(key, "").strip()
+            if value:
+                return value
+        return ""
+
+    @staticmethod
+    def _build_dsn_from_env() -> str:
+        host = os.getenv("ORACLE_HOST", "").strip()
+        port = os.getenv("ORACLE_PORT", "").strip()
+        service = os.getenv("ORACLE_SERVICE", "").strip()
+        if host and port and service:
+            return f"{host}:{port}/{service}"
+        return ""
 
     def _parse_binding(self, raw: dict[str, Any], index: int) -> ShapeBindingConfig:
         scope = f"bindings[{index}]"
