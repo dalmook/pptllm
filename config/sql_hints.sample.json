@@ -1,0 +1,13 @@
+{
+  "tbl_pmix_qtr": {
+    "business_context": "PMIX SOKBO 분기별 Sales MEQ 보고서",
+    "source_table_hint": "mst_psi_simul_report",
+    "filters_hint": [
+      "p_module='PMIX'",
+      "s_module='SOKBO'"
+    ],
+    "notes": [
+      "분기 컬럼 alias는 PPT 헤더와 정확히 맞춰야 함"
+    ]
+  }
+}
