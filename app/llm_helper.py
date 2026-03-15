@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import urllib.error
-import urllib.request
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -22,6 +20,8 @@ from app.utils.formatters import format_korean_now
 
 
 class BaseProvider(ABC):
+    """LLM provider 공통 인터페이스."""
+
     name: str
     model: str
 
@@ -35,6 +35,8 @@ class BaseProvider(ABC):
 
 
 class MockProvider(BaseProvider):
+    """LLM 없이 휴리스틱으로 draft를 생성하는 provider."""
+
     name = "mock"
     model = "mock-heuristic"
 
@@ -134,6 +136,8 @@ class MockProvider(BaseProvider):
 
 
 class OpenAICompatibleProvider(BaseProvider):
+    """OpenAI SDK 기반 OpenAI-compatible provider."""
+
     name = "openai_compatible"
 
     def __init__(self, base_url: str, model: str, api_key: str, timeout_s: int = 60) -> None:
@@ -141,6 +145,7 @@ class OpenAICompatibleProvider(BaseProvider):
         self.model = model
         self.api_key = api_key
         self.timeout_s = timeout_s
+        self._response_json_mode = os.getenv("LLM_RESPONSE_JSON_MODE", "off").strip().lower()
 
     def generate_map_draft(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._chat_json(build_map_generation_prompt(payload))
@@ -149,33 +154,40 @@ class OpenAICompatibleProvider(BaseProvider):
         return self._chat_json(build_sql_generation_prompt(payload))
 
     def _chat_json(self, prompt: str) -> dict[str, Any]:
-        body = {
+        try:
+            from openai import OpenAI
+        except ImportError as exc:
+            raise RuntimeError("openai 패키지가 필요합니다. `pip install openai` 후 다시 시도하세요.") from exc
+
+        client = OpenAI(base_url=self.base_url, api_key=self.api_key, timeout=self.timeout_s)
+
+        kwargs: dict[str, Any] = {
             "model": self.model,
             "temperature": 0,
-            "response_format": {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": "JSON만 출력하세요."},
                 {"role": "user", "content": prompt},
             ],
         }
-        req = urllib.request.Request(
-            url=f"{self.base_url}/chat/completions",
-            data=json.dumps(body).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"},
-            method="POST",
-        )
+        if self._response_json_mode == "on":
+            kwargs["response_format"] = {"type": "json_object"}
+
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
-                raw = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            raise RuntimeError(f"LLM 호출 HTTP 오류: {exc.code} {exc.reason}") from exc
+            resp = client.chat.completions.create(**kwargs)
+            content = (resp.choices[0].message.content or "").strip()
         except Exception as exc:  # pylint: disable=broad-except
             raise RuntimeError(f"LLM 호출 실패: {exc}") from exc
 
-        content = str(raw.get("choices", [{}])[0].get("message", {}).get("content", ""))
+        return self._parse_content_json(content)
+
+    @staticmethod
+    def _parse_content_json(content: str) -> dict[str, Any]:
         try:
             return json.loads(content)
         except json.JSONDecodeError:
+            fence = re.search(r"```json\s*(\{.*?\})\s*```", content, flags=re.DOTALL)
+            if fence:
+                return json.loads(fence.group(1))
             m = re.search(r"\{.*\}", content, flags=re.DOTALL)
             if not m:
                 raise RuntimeError("LLM 응답 JSON 파싱에 실패했습니다.")

@@ -40,6 +40,24 @@ pip install -r requirements.txt
 python -m app.main
 ```
 
+
+## Oracle 연결 설정
+
+DB 연결값은 기본적으로 `config/report_map.json`의 `db` 섹션을 사용합니다.
+아래 환경변수를 설정하면 같은 키를 **우선 override** 하도록 지원합니다.
+
+```cmd
+set ORACLE_HOST=gmgsdd09-vip.sec.samsung.net
+set ORACLE_PORT=2541
+set ORACLE_SERVICE=MEMSCM
+set ORACLE_USER=memscm
+set ORACLE_PW=mem01scm
+```
+
+- `ORACLE_DSN`을 직접 지정할 수도 있습니다. (예: `HOST:PORT/SERVICE`)
+- `ORACLE_DSN`이 없으면 `ORACLE_HOST/ORACLE_PORT/ORACLE_SERVICE`를 조합해 DSN을 만듭니다.
+- 환경변수가 비어 있으면 `report_map.json`의 `db.user/password/dsn` 값이 사용됩니다.
+
 ## GUI 버튼
 
 - 실행
