@@ -27,9 +27,30 @@ set LLM_PROVIDER=openai_compatible
 set LLM_BASE_URL=https://api.openai.com/v1
 set LLM_MODEL=gpt-4o-mini
 set LLM_API_KEY=YOUR_API_KEY
+set LLM_API_STYLE=auto
 ```
 
+- `LLM_API_STYLE`
+  - `auto`(기본): `responses` 호출을 먼저 시도하고 실패 시 `chat.completions`로 fallback
+  - `responses`: `gpt_oss_example.py`와 유사한 Responses API만 사용
+  - `chat`: Chat Completions API만 사용
+
 `.env.example` 참고.
+
+
+### GPT-OSS gateway provider
+```cmd
+set LLM_PROVIDER=gpt_oss
+set GPT_OSS_API_URL=http://apigw.samsungds.net:8000/gpt-oss/1/gpt-oss-120b/v1/chat/completions
+set GPT_OSS_CREDENTIAL_KEY=credential:...
+set GPT_OSS_USER_ID=your.adid
+set GPT_OSS_USER_TYPE=AD_ID
+set GPT_OSS_SEND_SYSTEM_NAME=GOC_MAIL_RAG_PIPELINE
+set GPT_OSS_MODEL=openai/gpt-oss-120b
+```
+
+제공해주신 `gpt_oss_example.py`와 동일하게 `x-dep-ticket`, `Send-System-Name`, `User-Id`, `User-Type`, `Prompt-Msg-Id`, `Completion-Msg-Id` 헤더를 사용해 호출합니다.
+
 
 ## Windows CMD 실행
 
@@ -108,6 +129,7 @@ set ORACLE_PW=mem01scm
 - generated map/SQL은 모두 초안입니다.
 - 자동으로 `report_map.json`/`sql/*.sql`을 덮어쓰지 않습니다.
 - OpenAI-compatible 호출 실패 시 환경변수/네트워크/응답 형식을 확인하세요.
+- map 초안/SQL 초안 생성 모두 동일한 LLM provider 경로(`LLMHelper`)를 사용합니다.
 
 ## 다음 7단계 제안
 

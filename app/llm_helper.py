@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import uuid
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -146,6 +147,7 @@ class OpenAICompatibleProvider(BaseProvider):
         self.api_key = api_key
         self.timeout_s = timeout_s
         self._response_json_mode = os.getenv("LLM_RESPONSE_JSON_MODE", "off").strip().lower()
+        self._api_style = os.getenv("LLM_API_STYLE", "auto").strip().lower()
 
     def generate_map_draft(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._chat_json(build_map_generation_prompt(payload))
@@ -160,7 +162,28 @@ class OpenAICompatibleProvider(BaseProvider):
             raise RuntimeError("openai 패키지가 필요합니다. `pip install openai` 후 다시 시도하세요.") from exc
 
         client = OpenAI(base_url=self.base_url, api_key=self.api_key, timeout=self.timeout_s)
+        errors: list[str] = []
 
+        if self._api_style in {"auto", "responses"}:
+            try:
+                content = self._call_responses_api(client, prompt)
+                return self._parse_content_json(content)
+            except Exception as exc:  # pylint: disable=broad-except
+                errors.append(f"responses API 실패: {exc}")
+                if self._api_style == "responses":
+                    raise RuntimeError("LLM 호출 실패: " + " | ".join(errors)) from exc
+
+        if self._api_style in {"auto", "chat"}:
+            try:
+                content = self._call_chat_api(client, prompt)
+                return self._parse_content_json(content)
+            except Exception as exc:  # pylint: disable=broad-except
+                errors.append(f"chat API 실패: {exc}")
+                raise RuntimeError("LLM 호출 실패: " + " | ".join(errors)) from exc
+
+        raise RuntimeError(f"LLM_API_STYLE 값이 올바르지 않습니다: {self._api_style}")
+
+    def _call_chat_api(self, client: Any, prompt: str) -> str:
         kwargs: dict[str, Any] = {
             "model": self.model,
             "temperature": 0,
@@ -171,14 +194,37 @@ class OpenAICompatibleProvider(BaseProvider):
         }
         if self._response_json_mode == "on":
             kwargs["response_format"] = {"type": "json_object"}
+        resp = client.chat.completions.create(**kwargs)
+        return str(resp.choices[0].message.content or "").strip()
 
-        try:
-            resp = client.chat.completions.create(**kwargs)
-            content = (resp.choices[0].message.content or "").strip()
-        except Exception as exc:  # pylint: disable=broad-except
-            raise RuntimeError(f"LLM 호출 실패: {exc}") from exc
+    def _call_responses_api(self, client: Any, prompt: str) -> str:
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "input": [
+                {"role": "system", "content": [{"type": "input_text", "text": "JSON만 출력하세요."}]},
+                {"role": "user", "content": [{"type": "input_text", "text": prompt}]},
+            ],
+            "temperature": 0,
+        }
+        if self._response_json_mode == "on":
+            kwargs["response_format"] = {"type": "json_object"}
+        resp = client.responses.create(**kwargs)
+        content = getattr(resp, "output_text", "")
+        if content:
+            return str(content).strip()
 
-        return self._parse_content_json(content)
+        output = getattr(resp, "output", None) or []
+        parts: list[str] = []
+        for item in output:
+            for c in getattr(item, "content", None) or []:
+                text_value = getattr(c, "text", None)
+                if isinstance(text_value, str) and text_value.strip():
+                    parts.append(text_value.strip())
+                elif hasattr(text_value, "value") and isinstance(text_value.value, str) and text_value.value.strip():
+                    parts.append(text_value.value.strip())
+        if not parts:
+            raise RuntimeError("responses API 응답에서 텍스트를 찾지 못했습니다.")
+        return "\n".join(parts)
 
     @staticmethod
     def _parse_content_json(content: str) -> dict[str, Any]:
@@ -192,6 +238,65 @@ class OpenAICompatibleProvider(BaseProvider):
             if not m:
                 raise RuntimeError("LLM 응답 JSON 파싱에 실패했습니다.")
             return json.loads(m.group(0))
+
+
+class GptOssProvider(BaseProvider):
+    """사내 GPT-OSS 게이트웨이 전용 provider (requests 기반)."""
+
+    name = "gpt_oss"
+
+    def __init__(self, api_url: str, credential_key: str, user_id: str, send_system_name: str, model: str, timeout_s: int = 60) -> None:
+        self.api_url = api_url.strip()
+        self.credential_key = credential_key.strip()
+        self.user_id = user_id.strip()
+        self.send_system_name = send_system_name.strip()
+        self.model = model.strip()
+        self.timeout_s = timeout_s
+
+    def generate_map_draft(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._chat_json(build_map_generation_prompt(payload))
+
+    def generate_sql_draft(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._chat_json(build_sql_generation_prompt(payload))
+
+    def _chat_json(self, prompt: str) -> dict[str, Any]:
+        try:
+            import requests
+        except ImportError as exc:
+            raise RuntimeError("requests 패키지가 필요합니다. `pip install requests` 후 다시 시도하세요.") from exc
+
+        headers = {
+            "x-dep-ticket": self.credential_key,
+            "Send-System-Name": self.send_system_name,
+            "User-Id": self.user_id,
+            "User-Type": os.getenv("GPT_OSS_USER_TYPE", "AD_ID").strip() or "AD_ID",
+            "Prompt-Msg-Id": str(uuid.uuid4()),
+            "Completion-Msg-Id": str(uuid.uuid4()),
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": "JSON만 출력하세요."},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0,
+            "max_tokens": int(os.getenv("LLM_MAX_TOKENS", "1200")),
+            "stream": False,
+        }
+
+        try:
+            resp = requests.post(self.api_url, headers=headers, json=payload, timeout=self.timeout_s)
+            resp.raise_for_status()
+            raw = resp.json()
+            content = str(raw.get("choices", [{}])[0].get("message", {}).get("content", "")).strip()
+        except Exception as exc:  # pylint: disable=broad-except
+            raise RuntimeError(f"GPT-OSS 호출 실패: {exc}") from exc
+
+        return OpenAICompatibleProvider._parse_content_json(content)
+
 
 
 class LLMHelper:
@@ -208,6 +313,17 @@ class LLMHelper:
             if not base_url or not model or not api_key:
                 raise ValueError("openai_compatible 사용 시 LLM_BASE_URL, LLM_MODEL, LLM_API_KEY가 필요합니다.")
             return cls(OpenAICompatibleProvider(base_url, model, api_key))
+        if provider_name == "gpt_oss":
+            api_url = os.getenv("GPT_OSS_API_URL", "").strip()
+            credential_key = os.getenv("GPT_OSS_CREDENTIAL_KEY", "").strip()
+            user_id = os.getenv("GPT_OSS_USER_ID", "").strip()
+            send_system_name = os.getenv("GPT_OSS_SEND_SYSTEM_NAME", "").strip()
+            model = os.getenv("GPT_OSS_MODEL", "openai/gpt-oss-120b").strip()
+            if not api_url or not credential_key or not user_id or not send_system_name:
+                raise ValueError(
+                    "gpt_oss 사용 시 GPT_OSS_API_URL, GPT_OSS_CREDENTIAL_KEY, GPT_OSS_USER_ID, GPT_OSS_SEND_SYSTEM_NAME가 필요합니다."
+                )
+            return cls(GptOssProvider(api_url, credential_key, user_id, send_system_name, model))
         return cls(MockProvider())
 
     def generate_report_map_draft(self, structure: PptStructureReport, sql_keys: list[str], user_hints: str | None = None) -> ReportMapDraft:
